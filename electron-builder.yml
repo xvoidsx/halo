@@ -17,6 +17,7 @@ asarUnpack:
   - node_modules/node-pty/**
 linux:
   category: Development
+  syncDesktopName: true
   target:
     - target: deb
       arch:

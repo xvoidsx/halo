@@ -99,6 +99,26 @@ what to build, where things live, and the lessons that apply here.
   and verify asar contents (`npx asar list`) + deb permissions
   (`dpkg-deb -c`).
 - Always commit `package-lock.json` — `npm ci` on CI fails without it.
+- **App icon lives at `build/icon.png`** (1600x1600, neon halo ring,
+  nightshadeNeon). electron-builder picks it up by default and renders the
+  hicolor sizes — no icon config needed. Never ship the default Electron
+  icon again.
+- **Launcher identity:** `desktopName: org.xvoidsx.halo` in package.json +
+  `linux.syncDesktopName: true` in electron-builder.yml, so the Wayland
+  app_id / WM_CLASS matches the .desktop entry and the launcher links the
+  running window to it.
+- **`/usr/bin/halo` comes from the default postinst** (update-alternatives
+  symlink to /opt/Halo/halo, fallback `ln -sf`) — do NOT add a custom
+  afterInstall script for it. If `halo` is "command not found" after
+  install, the package was never configured: `dpkg -i` without deps
+  installed leaves postinst unrun — finish with `sudo apt -f install`
+  (or install with `sudo apt install ./halo_*.deb`, which resolves deps).
+- **Running as root:** Electron FATALS without --no-sandbox, and the check
+  fires in Electron's native launcher BEFORE Halo's JS runs — so no in-app
+  fix can catch it (verified: a getuid/appendSwitch guard shipped in the
+  asar still FATALed). Do not try to fix this in main.ts. The real answer
+  is run as a normal user — `halo` is on PATH after a proper install — or
+  `halo --no-sandbox` when root is unavoidable.
 
 ## Verification before claiming anything
 

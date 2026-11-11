@@ -9,6 +9,7 @@
     "react-dom": "^19.1.0"
   },
   "description": "Halo — a nightshade neon Electron shell that lets herdr run trails locally, with your repos and agents in one live view.",
+  "desktopName": "org.xvoidsx.halo",
   "devDependencies": {
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
