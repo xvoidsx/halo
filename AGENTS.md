@@ -23,13 +23,18 @@ what to build, where things live, and the lessons that apply here.
 - `electron/` — main process: `main.ts` (window + IPC), `preload.ts`
   (typed contextBridge — the renderer never touches Node directly),
   `herdrAdapter.ts` (herdr CLI boundary), `settingsFile.ts`
-  (`~/.config/halo/settings.json`).
+  (`~/.config/halo/settings.json`), `terminal.ts` (node-pty shells, one
+  per repo).
 - `src/` — renderer (React + Vite): `App.tsx` (sidebar trails, main trail
-  view, settings), `theme.css` (nightshadeNeon), `types.ts` (shared types).
+  view, settings, terminal + chat tabs), `Terminal.tsx` (xterm.js panel,
+  lazy-loaded), `AgentChat.tsx` (chat pane, polls `herdr agent read`),
+  `theme.css` (nightshadeNeon), `types.ts` (shared types).
   No placeholder data anywhere — an empty trail list means no trail has
   run yet.
 - `electron-builder.yml` — Linux `.deb` packaging. Output goes to `release/`
-  (not `dist/`, which is Vite's renderer output).
+  (not `dist/`, which is Vite's renderer output). node-pty ships in the
+  package (`files` + `asarUnpack` — the .node binary cannot load from
+  inside asar) and is rebuilt for Electron at pack time.
 
 ## Herdr rules (from navi's own herdr work)
 
@@ -41,6 +46,46 @@ what to build, where things live, and the lessons that apply here.
 - `herdr agent list` output shape is best-effort parsed (JSON first, then
   raw lines). Verify the real format on a machine with herdr installed
   before trusting the agent list.
+
+## Agent chat (herdr send / read)
+
+- Chat is `agent send <pane_id> <text>` (literal text, no Enter) followed
+  by `agent send-keys <pane_id> enter` to submit, and `agent read
+  <pane_id> --source recent-unwrapped --lines N` (plain terminal text)
+  polled every 2 s. Documented in herdr's CLI reference (herdr.dev,
+  v0.7–0.9).
+- `agent attach` is never used for chat — it takes over the current
+  terminal, which a GUI window cannot do.
+- The send/read path is **not yet verified on a machine with herdr
+  installed** (herdr is absent in this sandbox). The adapter returns
+  honest errors; the UI shows them as system lines in the chat. Bench it
+  on a real machine before trusting it.
+- Agent messages in the chat are text actually read from the pane. If a
+  poll returns a snapshot that no longer starts with the previous one
+  (scrollback scrolled past the window), the whole snapshot is shown —
+  never diffed into invented text.
+
+## Terminal (xterm.js + node-pty)
+
+- Stack, borrowed from copland on purpose: node-pty shells in main
+  (`electron/terminal.ts`), xterm.js in the renderer (`src/Terminal.tsx`),
+  WebGL renderer with a canvas fallback (WebGL can fail on old hardware).
+- One terminal per repo, cwd = the repo path from settings. The shell is
+  `$SHELL` or `/bin/bash`. If the path does not exist, the panel says so
+  instead of showing a dead prompt. All shells are killed on quit.
+- The terminal chunk is lazy-loaded (`React.lazy` in App.tsx) so the trail
+  view's initial bundle stays ~238 kB; xterm (~443 kB) loads only when
+  the Terminal tab opens.
+- **Install command in this sandbox** (node-gyp chown is blocked outside
+  /tmp here): `npm_config_devdir=/tmp/node-gyp-cache npm install
+  --unsafe-perm=true` — used for `@xterm/xterm@6.0.0`,
+  `@xterm/addon-fit@0.11.0`, `@xterm/addon-webgl@0.19.0`, `node-pty@1.1.0`.
+  On a real machine plain `npm install` works.
+- Packaging: node-pty must be in `electron-builder.yml` `files` AND
+  `asarUnpack` (the .node binary cannot load from inside asar), and
+  electron-builder rebuilds it for Electron at pack time. Verify the
+  unpacked `pty.node` exists in `release/linux-unpacked/resources/
+  app.asar.unpacked/` before shipping a .deb.
 
 ## Electron / packaging lessons (xvoidsx)
 

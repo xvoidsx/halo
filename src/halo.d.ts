@@ -1,4 +1,12 @@
-import type { HaloSettings, HerdrState, Trail } from './types';
+import type {
+  AgentReadResult,
+  AgentSendResult,
+  HaloSettings,
+  HerdrState,
+  TermOpResult,
+  TermSpawnResult,
+  Trail,
+} from './types';
 
 declare global {
   interface Window {
@@ -10,6 +18,14 @@ declare global {
       herdrStatus: () => Promise<HerdrState>;
       listTrailsLive: () => Promise<{ status: string; todo: string }>;
       watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
+      agentSend: (paneId: string, text: string) => Promise<AgentSendResult>;
+      agentRead: (paneId: string, lines?: number) => Promise<AgentReadResult>;
+      termSpawn: (repoId: string, cwd: string, cols: number, rows: number) => Promise<TermSpawnResult>;
+      termWrite: (id: string, data: string) => Promise<TermOpResult>;
+      termResize: (id: string, cols: number, rows: number) => Promise<TermOpResult>;
+      termKill: (id: string) => Promise<TermOpResult>;
+      onTermData: (cb: (ev: { id: string; data: string }) => void) => () => void;
+      onTermExit: (cb: (ev: { id: string; code: number }) => void) => () => void;
     };
   }
 }

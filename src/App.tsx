@@ -1,8 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import type { AgentStatus, HaloSettings, HerdrState, Trail } from './types.js';
 import { defaultSettings } from './types.js';
+import AgentChat from './AgentChat.js';
 
-type View = 'trail' | 'settings';
+// The terminal pulls in xterm.js (~450 kB) — lazy-load it so the trail
+// view stays light on old hardware and the terminal chunk only loads
+// when the Terminal tab opens.
+const TerminalPanel = lazy(() => import('./Terminal.js'));
+
+type View = 'trail' | 'settings' | 'terminal' | 'chat';
 
 const STATUS_PILL: Record<string, string> = {
   running: 'cyan',
@@ -282,6 +288,23 @@ export default function App() {
   }, []);
 
   const selected = useMemo(() => trails.find((t) => t.id === selectedId) ?? trails[0], [trails, selectedId]);
+  const activeRepo = useMemo(
+    () => settings.repos.find((r) => r.id === settings.activeRepoId) ?? settings.repos[0] ?? null,
+    [settings.repos, settings.activeRepoId],
+  );
+  const activeAgent = useMemo(
+    () => herdr?.agents.find((a) => a.paneId === settings.activeAgentPaneId) ?? herdr?.agents[0] ?? null,
+    [herdr, settings.activeAgentPaneId],
+  );
+
+  const headTitle =
+    view === 'trail'
+      ? (selected?.title ?? 'Trails')
+      : view === 'terminal'
+        ? `Terminal — ${activeRepo?.name ?? 'no repo'}`
+        : view === 'chat'
+          ? `Chat — ${activeAgent?.label ?? 'no agent'}`
+          : 'Settings';
 
   return (
     <div className="shell">
@@ -324,12 +347,26 @@ export default function App() {
 
       <main className="main">
         <div className="main-head">
-          {view === 'trail' && selected ? (
-            <h2>{selected.title}</h2>
-          ) : (
-            <h2>Settings</h2>
-          )}
-          <button className="icon-btn" onClick={() => setView(view === 'settings' ? 'trail' : 'settings')}>
+          <h2>{headTitle}</h2>
+          <button
+            className={`icon-btn ${view === 'trail' ? 'active' : ''}`}
+            onClick={() => setView('trail')}
+          >
+            Trails
+          </button>
+          <button
+            className={`icon-btn ${view === 'terminal' ? 'active' : ''}`}
+            onClick={() => setView('terminal')}
+          >
+            ▤ Terminal
+          </button>
+          <button
+            className={`icon-btn ${view === 'chat' ? 'active' : ''}`}
+            onClick={() => setView('chat')}
+          >
+            ✦ Chat
+          </button>
+          <button className={`icon-btn ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>
             ⚙ Settings
           </button>
         </div>
@@ -344,6 +381,36 @@ export default function App() {
               placeholder data: an empty list means no trail has run yet.
             </p>
           </div>
+        ) : view === 'terminal' ? (
+          activeRepo ? (
+            <Suspense
+              fallback={
+                <div className="main-body">
+                  <p className="empty">Loading terminal…</p>
+                </div>
+              }
+            >
+              <TerminalPanel key={activeRepo.id} repo={activeRepo} />
+            </Suspense>
+          ) : (
+            <div className="main-body">
+              <p className="empty">No repo selected.</p>
+              <p className="note">Add a repo in Settings first — the terminal opens in that repo&apos;s directory.</p>
+            </div>
+          )
+        ) : view === 'chat' ? (
+          activeAgent ? (
+            <AgentChat key={activeAgent.paneId} agent={activeAgent} />
+          ) : (
+            <div className="main-body">
+              <p className="empty">No agent selected.</p>
+              <p className="note">
+                {herdr && !herdr.installed
+                  ? 'herdr is not installed on this machine — start herdr and come back.'
+                  : 'Pick a live agent in Settings first — chat talks to it by pane_id.'}
+              </p>
+            </div>
+          )
         ) : (
           <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} />
         )}

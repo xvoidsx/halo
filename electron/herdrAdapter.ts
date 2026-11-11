@@ -21,11 +21,22 @@
 //   or from herdr once a trails surface is agreed. Currently no trail
 //   data is served at all — the list is empty until then.
 // - runTrail() / watchTrail(): stream trail events into the renderer.
-// - agent attach/read: `herdr agent attach <pane_id>` / `read <pane_id>`
-//   exist; wire them once the settings panel needs to open an agent.
+// - Agent chat (sendAgentMessage / readAgentOutput below) is wired to the
+//   real CLI surface, but NOT yet verified on a machine with herdr
+//   installed: `agent send` + `agent send-keys enter` + `agent read` are
+//   documented in herdr's CLI reference (herdr.dev, v0.7–0.9), and the
+//   adapter surfaces CLI errors honestly instead of faking a reply. Bench
+//   the chat on a real machine before trusting it. `agent attach` is
+//   deliberately NOT used for chat — it takes over the current terminal,
+//   which is not something a GUI window can do.
+//
+// Agent targeting rule, always: address by pane_id. The `agent` field in
+// `herdr agent list` is a display label, not a target — attach/read do
+// not resolve bare labels on Raven's machine (attach opencode ->
+// agent_not_found). pane_id is the always-addressable target.
 
 import { execFile } from 'node:child_process';
-import type { HerdrAgent, HerdrState } from '../src/types.js';
+import type { AgentReadResult, AgentSendResult, HerdrAgent, HerdrState } from '../src/types.js';
 
 const TIMEOUT_MS = 5000;
 
@@ -120,4 +131,67 @@ export async function watchTrail(_trailId: string): Promise<NotImplemented> {
     status: 'not-implemented',
     todo: 'watchTrail(): live trail event streaming is not built yet. The trail list stays empty until the Entire CLI surface is agreed.',
   };
+}
+
+// --- Agent chat: send + read, by pane_id only. ---------------------------
+//
+// Documented herdr CLI surface (herdr.dev CLI reference, v0.7–0.9):
+// - `herdr agent send <target> <text>` writes LITERAL text to the
+//   agent's pane — no Enter. Follow it with `agent send-keys <target>
+//   enter` to submit, exactly like typing a prompt and pressing Enter.
+// - `herdr agent read <target> --source recent-unwrapped --lines N`
+//   prints the pane's terminal text directly (UTF-8, ANSI stripped by
+//   default) — plain text, not JSON.
+// - `herdr agent attach <target>` takes over the current terminal. Halo
+//   never uses it: a GUI window cannot take over a terminal.
+// NOT yet verified on a machine with herdr installed — herdr is absent
+// in this sandbox. Every failure here is surfaced to the UI as an error,
+// never papered over with a fabricated reply.
+
+/** Type a message into an agent's pane and press Enter to submit it. */
+export async function sendAgentMessage(paneId: string, text: string): Promise<AgentSendResult> {
+  if (!paneId || !paneId.trim()) {
+    return { ok: false, detail: 'No agent selected — pick a live agent in Settings first.' };
+  }
+  if (!text.trim()) {
+    return { ok: false, detail: 'Nothing to send.' };
+  }
+  const sent = await runHerdr(['agent', 'send', paneId, text]);
+  if (sent.code === -1) {
+    return { ok: false, detail: 'herdr is not installed (not on PATH).' };
+  }
+  if (sent.code !== 0) {
+    return {
+      ok: false,
+      detail: `herdr agent send failed: ${(sent.stderr || sent.stdout).trim() || `exit ${sent.code}`}`,
+    };
+  }
+  const enter = await runHerdr(['agent', 'send-keys', paneId, 'enter']);
+  if (enter.code !== 0) {
+    return {
+      ok: false,
+      detail: `Your text was typed into the pane, but Enter did not land: ${(enter.stderr || enter.stdout).trim() || `exit ${enter.code}`}`,
+    };
+  }
+  return { ok: true, detail: 'Sent to the agent.' };
+}
+
+/** Read an agent's recent pane output as plain text. */
+export async function readAgentOutput(paneId: string, lines = 120): Promise<AgentReadResult> {
+  if (!paneId || !paneId.trim()) {
+    return { ok: false, paneId, output: '', detail: 'No agent selected — pick a live agent in Settings first.' };
+  }
+  const res = await runHerdr(['agent', 'read', paneId, '--source', 'recent-unwrapped', '--lines', String(lines)]);
+  if (res.code === -1) {
+    return { ok: false, paneId, output: '', detail: 'herdr is not installed (not on PATH).' };
+  }
+  if (res.code !== 0) {
+    return {
+      ok: false,
+      paneId,
+      output: '',
+      detail: `herdr agent read failed: ${(res.stderr || res.stdout).trim() || `exit ${res.code}`}`,
+    };
+  }
+  return { ok: true, paneId, output: res.stdout, detail: '' };
 }

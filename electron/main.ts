@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, settingsPath } from './settingsFile.js';
-import { detectHerdr, listTrails, watchTrail } from './herdrAdapter.js';
+import { detectHerdr, listTrails, readAgentOutput, sendAgentMessage, watchTrail } from './herdrAdapter.js';
+import { TerminalManager } from './terminal.js';
 import type { HaloSettings } from '../src/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,25 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Terminal: node-pty shells, one per repo. Output streams to the
+  // renderer; input and resizes come back over IPC.
+  const termManager = new TerminalManager(
+    (id, data) => {
+      win?.webContents.send('halo:term-data', { id, data });
+    },
+    (id, code) => {
+      win?.webContents.send('halo:term-exit', { id, code });
+    },
+  );
+  ipcMain.handle('halo:term-spawn', (_e, repoId: string, cwd: string, cols: number, rows: number) =>
+    termManager.spawn(repoId, cwd, cols, rows),
+  );
+  ipcMain.handle('halo:term-write', (_e, id: string, data: string) => termManager.write(id, data));
+  ipcMain.handle('halo:term-resize', (_e, id: string, cols: number, rows: number) =>
+    termManager.resize(id, cols, rows),
+  );
+  ipcMain.handle('halo:term-kill', (_e, id: string) => termManager.kill(id));
+
   // Settings: local file only, never leaves the machine.
   ipcMain.handle('halo:getSettings', (): HaloSettings => loadSettings());
   ipcMain.handle('halo:saveSettings', (_e, next: HaloSettings): { ok: true; path: string } => {
@@ -58,6 +78,17 @@ app.whenReady().then(() => {
   ipcMain.handle('halo:herdrStatus', () => detectHerdr());
   ipcMain.handle('halo:listTrailsLive', () => listTrails());
   ipcMain.handle('halo:watchTrail', (_e, id: string) => watchTrail(id));
+
+  // Agent chat: send + read by pane_id. Errors surface honestly — the
+  // chat never invents a reply. Not yet verified on a machine with
+  // herdr installed (see herdrAdapter.ts).
+  ipcMain.handle('halo:agent-send', (_e, paneId: string, text: string) => sendAgentMessage(paneId, text));
+  ipcMain.handle('halo:agent-read', (_e, paneId: string, lines?: number) =>
+    readAgentOutput(paneId, lines ?? 120),
+  );
+
+  // No shell outlives Halo.
+  app.on('before-quit', () => termManager.killAll());
 
   createWindow();
   console.log('[halo] ready — dev server:', isDev ? process.env.VITE_DEV_SERVER_URL : '(built dist)');

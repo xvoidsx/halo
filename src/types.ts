@@ -85,6 +85,44 @@ export interface HerdrState {
   agents: HerdrAgent[];
 }
 
+/** One line in an agent chat. 'you' is text Raven typed; 'agent' is text
+ * read back from the agent's pane via `herdr agent read`; 'system' is
+ * Halo itself (errors, state changes). Agent text is never invented. */
+export interface ChatMessage {
+  id: string;
+  at: string;
+  from: 'you' | 'agent' | 'system';
+  text: string;
+}
+
+/** Result of sending a message to a herdr agent by pane_id. */
+export interface AgentSendResult {
+  ok: boolean;
+  detail: string;
+}
+
+/** Result of reading a herdr agent's pane output by pane_id. `output` is
+ * raw terminal text from `herdr agent read` — plain text, not JSON. */
+export interface AgentReadResult {
+  ok: boolean;
+  paneId: string;
+  output: string;
+  detail: string;
+}
+
+/** Result of spawning an in-app terminal shell. */
+export interface TermSpawnResult {
+  ok: boolean;
+  id?: string;
+  detail: string;
+}
+
+/** Result of a terminal write / resize / kill. */
+export interface TermOpResult {
+  ok: boolean;
+  detail: string;
+}
+
 export interface RepoEntry {
   id: string;
   name: string;
