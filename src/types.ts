@@ -73,7 +73,7 @@ export type AgentStatus = 'running' | 'idle' | 'not-detected' | 'error';
 export interface HerdrAgent {
   /** herdr pane_id — the always-addressable target. */
   paneId: string;
-  /** Detected agent label, e.g. 'opencode'. Display only. */
+  /** Detected agent label, e.g. 'pi'. Display only. */
   label: string;
   status: AgentStatus;
   detail?: string;
@@ -149,6 +149,7 @@ export interface HaloSettings {
     openai: ProviderConfig;
     anthropic: ProviderConfig;
     openrouter: ProviderConfig;
+    deepseek: ProviderConfig;
   };
 }
 
@@ -161,5 +162,6 @@ export const defaultSettings: HaloSettings = {
     openai: { apiKey: '', enabled: false },
     anthropic: { apiKey: '', enabled: false },
     openrouter: { apiKey: '', enabled: false },
+    deepseek: { apiKey: '', enabled: false },
   },
 };

@@ -28,6 +28,7 @@ export function loadSettings(): HaloSettings {
         openai: { ...defaultSettings.byok.openai, ...(parsed.byok?.openai ?? {}) },
         anthropic: { ...defaultSettings.byok.anthropic, ...(parsed.byok?.anthropic ?? {}) },
         openrouter: { ...defaultSettings.byok.openrouter, ...(parsed.byok?.openrouter ?? {}) },
+        deepseek: { ...defaultSettings.byok.deepseek, ...(parsed.byok?.deepseek ?? {}) },
       },
     };
   } catch {

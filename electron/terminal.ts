@@ -10,6 +10,7 @@
 // the renderer. The renderer never touches node-pty directly.
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app } from 'electron';
@@ -74,23 +75,26 @@ export class TerminalManager {
     return this.loadPromise;
   }
 
-  /** Spawn a shell in `cwd`. Returns an error (never a fake shell) when
-   * the directory does not exist or is not a directory on this machine. */
-  spawn(repoId: string, cwd: string, cols: number, rows: number): TermSpawnResult {
+  /** Spawn a shell in `cwd` (home when empty). `command` runs a program
+   * directly instead of the login shell — 'herdr' boots the herdr TUI
+   * in the pane. Returns an error (never a fake shell) when the
+   * directory does not exist or is not a directory on this machine. */
+  spawn(repoId: string, cwd: string, cols: number, rows: number, command?: string): TermSpawnResult {
+    const dir = cwd.trim() || os.homedir();
     if (!this.pty) {
       void this.ensureLoaded();
       return { ok: false, detail: this.loadError ?? 'Terminal engine is still loading — try again in a moment.' };
     }
     let stat: fs.Stats;
     try {
-      stat = fs.statSync(cwd);
+      stat = fs.statSync(dir);
     } catch {
-      return { ok: false, detail: `Repo path does not exist on this machine: ${cwd}` };
+      return { ok: false, detail: `Repo path does not exist on this machine: ${dir}` };
     }
     if (!stat.isDirectory()) {
-      return { ok: false, detail: `Repo path is not a directory: ${cwd}` };
+      return { ok: false, detail: `Repo path is not a directory: ${dir}` };
     }
-    const shell = process.env.SHELL || '/bin/bash';
+    const shell = command?.trim() || process.env.SHELL || '/bin/bash';
     const id = `term-${++this.counter}-${Date.now().toString(36)}`;
     let child: ptyTypes.IPty;
     try {
@@ -98,7 +102,7 @@ export class TerminalManager {
         name: 'xterm-256color',
         cols: Math.max(20, cols || 80),
         rows: Math.max(5, rows || 24),
-        cwd,
+        cwd: dir,
         env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>,
       });
     } catch (err) {
@@ -109,8 +113,8 @@ export class TerminalManager {
       this.terms.delete(id);
       this.sendExit(id, exitCode);
     });
-    this.terms.set(id, { id, repoId, cwd, shell, pty: child });
-    return { ok: true, id, detail: `Shell ${shell} started in ${cwd}` };
+    this.terms.set(id, { id, repoId, cwd: dir, shell, pty: child });
+    return { ok: true, id, detail: `${command?.trim() ? `Running ${shell}` : `Shell ${shell} started`} in ${dir}` };
   }
 
   write(id: string, data: string): TermOpResult {

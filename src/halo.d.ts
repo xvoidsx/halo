@@ -20,7 +20,7 @@ declare global {
       watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
       agentSend: (paneId: string, text: string) => Promise<AgentSendResult>;
       agentRead: (paneId: string, lines?: number) => Promise<AgentReadResult>;
-      termSpawn: (repoId: string, cwd: string, cols: number, rows: number) => Promise<TermSpawnResult>;
+      termSpawn: (repoId: string, cwd: string, cols: number, rows: number, command?: string) => Promise<TermSpawnResult>;
       termWrite: (id: string, data: string) => Promise<TermOpResult>;
       termResize: (id: string, cols: number, rows: number) => Promise<TermOpResult>;
       termKill: (id: string) => Promise<TermOpResult>;

@@ -106,7 +106,13 @@ what to build, where things live, and the lessons that apply here.
   0.1.2 pack runs `(umask 022; TMPDIR=~/workspace/.tmp npm run pack)` and
   the deb is verified with `dpkg-deb -c` (desktop + icon must be 644,
   binary 755) before every upload. `build/icon.png` itself is chmod 644 in
-  the tree too, since fpm preserves source modes.
+  the tree too, since fpm preserves source modes. Note umask only affects
+  NEW files: `git reset --hard` recreates checked-out files under the
+  sandbox umask (the 0.2.0 icons came back 660 after a reset), so
+  re-chmod the tree (`chmod 644 build/icons/*.png build/icon.png`,
+  `chmod -R a+rX node_modules`) before packing, and rely on
+  `scripts/after-install.sh` (`chmod -R a+rX /opt/Halo`) as the runtime
+  safety net on install.
 - **dpkg never fixes the mode of a directory that already exists.**
   The 0.1.0/0.1.1 debs (built under umask 007) left `/opt/Halo` and its
   subdirs as 770 root:root; upgrades replaced the files but not the dir

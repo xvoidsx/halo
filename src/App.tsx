@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import type { AgentStatus, HaloSettings, HerdrState, Trail } from './types.js';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import type { AgentStatus, HaloSettings, HerdrAgent, HerdrState, Trail } from './types.js';
+import type { TermPane } from './Terminal.js';
 import { defaultSettings } from './types.js';
 import AgentChat from './AgentChat.js';
 
@@ -28,6 +29,129 @@ function lightClass(status: AgentStatus): string {
   if (status === 'idle') return 'amber';
   if (status === 'error') return 'red';
   return 'gray';
+}
+
+// BYOK providers Halo likes. No harness or provider is the default —
+// herdr says which agents exist, and these cards just tell you where
+// a key comes from. Keys stay in the local settings file, 0600.
+const BYOK_PROVIDERS = [
+  {
+    key: 'deepseek',
+    name: 'DeepSeek',
+    blurb: 'Cheap frontier chat + reasoning, OpenAI-compatible API. deepseek-chat / deepseek-reasoner.',
+    url: 'https://platform.deepseek.com/api_keys',
+    urlLabel: 'platform.deepseek.com → API keys',
+  },
+  {
+    key: 'openai',
+    name: 'OpenAI',
+    blurb: 'GPT models via the OpenAI API.',
+    url: 'https://platform.openai.com/api-keys',
+    urlLabel: 'platform.openai.com → API keys',
+  },
+  {
+    key: 'anthropic',
+    name: 'Anthropic',
+    blurb: 'Claude models via the Anthropic API.',
+    url: 'https://console.anthropic.com/settings/keys',
+    urlLabel: 'console.anthropic.com → API keys',
+  },
+  {
+    key: 'openrouter',
+    name: 'OpenRouter',
+    blurb: 'One key, hundreds of models from many labs.',
+    url: 'https://openrouter.ai/keys',
+    urlLabel: 'openrouter.ai → Keys',
+  },
+] as const;
+
+/** Lain's presence pill, which opens the agent switcher: Lain herself
+ * plus every live herdr agent, with status lights. Picking an agent
+ * makes it the chat target. Frosted dropdown, never a separate page. */
+function AgentSwitcher({
+  herdr,
+  activePaneId,
+  onPick,
+  onRefresh,
+}: {
+  herdr: HerdrState | null;
+  activePaneId: string | null;
+  onPick: (paneId: string) => void;
+  onRefresh: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="lain-switch">
+      <button className="lain-chip" onClick={() => setOpen((o) => !o)} title="Switch chat agent">
+        <span>✦ Lain</span>
+        <span className="dot">● online ▾</span>
+      </button>
+      {open && (
+        <>
+          <button className="switcher-backdrop" onClick={() => setOpen(false)} aria-label="Close agent switcher" />
+          <div className="switcher-pop">
+            <div className="switcher-row switcher-head">
+              <span>✦ Lain</span>
+              <span className="dot">● online — your Halo host</span>
+            </div>
+            <h4>Agents — herdr</h4>
+            {!herdr && <p className="note">Checking herdr…</p>}
+            {herdr && !herdr.installed && <p className="note warn">● {herdr.detail}</p>}
+            {herdr && herdr.installed && herdr.agents.length === 0 && (
+              <p className="note">No agents running — start one in herdr, then refresh.</p>
+            )}
+            {herdr?.agents.map((a: HerdrAgent) => (
+              <button
+                key={a.paneId}
+                className={`switcher-row ${activePaneId === a.paneId ? 'active' : ''}`}
+                onClick={() => {
+                  onPick(a.paneId);
+                  setOpen(false);
+                }}
+              >
+                <span className={`status-light ${lightClass(a.status)}`}>●</span>
+                <span className="a-name">{a.label}</span>
+                <span className="a-detail">
+                  {a.paneId} · {a.status}
+                </span>
+              </button>
+            ))}
+            <button
+              className="switcher-row"
+              onClick={() => {
+                onRefresh();
+              }}
+            >
+              <span>↻ Refresh agents</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Trails home when nothing has run yet: a trail-like orbit, no
+ * test-repo names, no favoured harness — just the invitation. */
+function TrailsEmpty({ onOpenTerminal }: { onOpenTerminal: () => void }) {
+  return (
+    <div className="main-body trails-empty">
+      <div className="trail-orbit" aria-hidden="true">
+        <span className="orbit-ring" />
+        <span className="orbit-dot dot-a" />
+        <span className="orbit-dot dot-b" />
+        <span className="orbit-core" />
+      </div>
+      <p className="empty-title">Waiting on trails</p>
+      <p className="note">
+        No trail has run yet. Open the terminal and run a trail with the Entire CLI — in any repo, with any agent
+        herdr recognizes — and Halo picks it up live, right here.
+      </p>
+      <button className="primary-btn" onClick={onOpenTerminal}>
+        Open terminal
+      </button>
+    </div>
+  );
 }
 
 function TrailView({ trail }: { trail: Trail }) {
@@ -144,10 +268,12 @@ function SettingsView({
   settings,
   setSettings,
   herdr,
+  onRefreshHerdr,
 }: {
   settings: HaloSettings;
   setSettings: (next: HaloSettings) => void;
   herdr: HerdrState | null;
+  onRefreshHerdr: () => void;
 }) {
   const [saved, setSaved] = useState('');
   const [newRepoName, setNewRepoName] = useState('');
@@ -173,7 +299,7 @@ function SettingsView({
   return (
     <div className="main-body settings">
       <h3>Repos</h3>
-      {settings.repos.length === 0 && <p className="note">No repos yet — add the test repo below.</p>}
+      {settings.repos.length === 0 && <p className="note">No repos yet — add one below. Repos are optional context, not a requirement: the terminal opens at home without one.</p>}
       {settings.repos.map((r) => (
         <button
           key={r.id}
@@ -214,6 +340,9 @@ function SettingsView({
           </span>
         </button>
       ))}
+      <button className="icon-btn" onClick={onRefreshHerdr}>
+        ↻ Refresh agents
+      </button>
 
       <h3>Ollama — local-first</h3>
       <label>
@@ -235,22 +364,47 @@ function SettingsView({
       <p className="note">Ollama is not connected yet — the fields save locally for now.</p>
 
       <h3>BYOK providers</h3>
-      <p className="note warn">
-        Placeholder only — keys are stored in the local settings file (~/.config/halo/settings.json, 0600) and are not
-        wired to any provider yet.
+      <p className="note">
+        Bring your own keys — stored in the local settings file (~/.config/halo/settings.json, 0600) and never
+        leaving this machine. Providers are not connected yet; these fields save locally for now.
       </p>
-      {(['openai', 'anthropic', 'openrouter'] as const).map((p) => (
-        <label key={p}>
-          {p} API key
-          <input
-            type="password"
-            value={settings.byok[p].apiKey}
-            placeholder="not configured"
-            onChange={(e) =>
-              setSettings({ ...settings, byok: { ...settings.byok, [p]: { ...settings.byok[p], apiKey: e.target.value } } })
-            }
-          />
-        </label>
+      {BYOK_PROVIDERS.map((p) => (
+        <div key={p.key} className="provider-card">
+          <h4>{p.name}</h4>
+          <p>{p.blurb}</p>
+          <p>
+            Get a key:{' '}
+            <a href={p.url} target="_blank" rel="noreferrer">
+              {p.urlLabel}
+            </a>
+          </p>
+          <div className="provider-row">
+            <input
+              type="password"
+              value={settings.byok[p.key].apiKey}
+              placeholder="API key — not configured"
+              onChange={(e) =>
+                setSettings({
+                  ...settings,
+                  byok: { ...settings.byok, [p.key]: { ...settings.byok[p.key], apiKey: e.target.value } },
+                })
+              }
+            />
+            <label className="provider-enable">
+              <input
+                type="checkbox"
+                checked={settings.byok[p.key].enabled}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    byok: { ...settings.byok, [p.key]: { ...settings.byok[p.key], enabled: e.target.checked } },
+                  })
+                }
+              />
+              Enabled
+            </label>
+          </div>
+        </div>
       ))}
 
       <div className="save-row">
@@ -269,6 +423,15 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string>('');
   const [settings, setSettings] = useState<HaloSettings>(defaultSettings);
   const [herdr, setHerdr] = useState<HerdrState | null>(null);
+  // Terminal panes are first-class: one shell by default, at home —
+  // no repo required. Split adds panes; 'Open herdr' boots the herdr
+  // TUI in one. Panes mount on first visit and stay alive across tabs.
+  const [termPanes, setTermPanes] = useState<TermPane[]>([{ id: 'pane-home', title: 'shell', cwd: '' }]);
+  const [termMounted, setTermMounted] = useState(false);
+
+  const refreshHerdr = useCallback(() => {
+    if (window.halo) void window.halo.herdrStatus().then(setHerdr);
+  }, []);
 
   useEffect(() => {
     // No trail data is faked anywhere: the list starts empty and only
@@ -284,14 +447,35 @@ export default function App() {
       if (res.trails[0]) setSelectedId(res.trails[0].id);
     });
     void window.halo.getSettings().then(setSettings);
-    void window.halo.herdrStatus().then(setHerdr);
+    refreshHerdr();
+    // Live detection: herdr agents come and go — re-check while Halo is
+    // open, so an agent started after launch still shows up.
+    const timer = window.setInterval(refreshHerdr, 10000);
+    return () => window.clearInterval(timer);
+  }, [refreshHerdr]);
+
+  useEffect(() => {
+    if (view === 'terminal') setTermMounted(true);
+  }, [view]);
+
+  const addTermPane = useCallback((command?: string) => {
+    setTermPanes((panes) => [
+      ...panes,
+      {
+        id: `pane-${Date.now().toString(36)}`,
+        title: command ?? 'shell',
+        cwd: panes[0]?.cwd ?? '',
+        command,
+      },
+    ]);
+    setView('terminal');
+  }, []);
+
+  const closeTermPane = useCallback((id: string) => {
+    setTermPanes((panes) => (panes.length > 1 ? panes.filter((p) => p.id !== id) : panes));
   }, []);
 
   const selected = useMemo(() => trails.find((t) => t.id === selectedId) ?? trails[0], [trails, selectedId]);
-  const activeRepo = useMemo(
-    () => settings.repos.find((r) => r.id === settings.activeRepoId) ?? settings.repos[0] ?? null,
-    [settings.repos, settings.activeRepoId],
-  );
   const activeAgent = useMemo(
     () => herdr?.agents.find((a) => a.paneId === settings.activeAgentPaneId) ?? herdr?.agents[0] ?? null,
     [herdr, settings.activeAgentPaneId],
@@ -301,7 +485,7 @@ export default function App() {
     view === 'trail'
       ? (selected?.title ?? 'Trails')
       : view === 'terminal'
-        ? `Terminal — ${activeRepo?.name ?? 'no repo'}`
+        ? 'Terminal'
         : view === 'chat'
           ? `Chat — ${activeAgent?.label ?? 'no agent'}`
           : 'Settings';
@@ -313,10 +497,15 @@ export default function App() {
           <h1>HALO</h1>
           <p className="tagline">herdr, trails, one live view</p>
         </div>
-        <div className="lain-chip">
-          <span>✦ Lain</span>
-          <span className="dot">● online</span>
-        </div>
+        <AgentSwitcher
+          herdr={herdr}
+          activePaneId={settings.activeAgentPaneId}
+          onPick={(paneId) => {
+            setSettings((s) => ({ ...s, activeAgentPaneId: paneId }));
+            setView('chat');
+          }}
+          onRefresh={refreshHerdr}
+        />
         <div className="trail-list">
           <h2>Trails</h2>
           {trails.length === 0 && <p className="note">No trails yet.</p>}
@@ -339,10 +528,11 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div className="sidebar-foot">
+        <button className="sidebar-foot" onClick={refreshHerdr} title="Refresh herdr agents">
           <span className={`status-light ${herdr ? (herdr.installed ? (herdr.agents.length ? 'green' : 'amber') : 'gray') : 'gray'}`}>●</span>
           {herdr ? (herdr.installed ? `herdr · ${herdr.agents.length} agent${herdr.agents.length === 1 ? '' : 's'}` : 'herdr not detected') : 'herdr…'}
-        </div>
+          <span className="foot-refresh"> ↻</span>
+        </button>
       </aside>
 
       <main className="main">
@@ -370,36 +560,10 @@ export default function App() {
             ⚙ Settings
           </button>
         </div>
-        {view === 'trail' && selected ? (
-          <TrailView trail={selected} />
-        ) : view === 'trail' ? (
-          <div className="main-body">
-            <p className="empty">No trails yet.</p>
-            <p className="note">
-              Run your first trail with the Entire CLI (OpenCode as the test agent) in a connected repo —
-              trails-test first, then haibane — and it will show up here, live. Nothing here is
-              placeholder data: an empty list means no trail has run yet.
-            </p>
-          </div>
-        ) : view === 'terminal' ? (
-          activeRepo ? (
-            <Suspense
-              fallback={
-                <div className="main-body">
-                  <p className="empty">Loading terminal…</p>
-                </div>
-              }
-            >
-              <TerminalPanel key={activeRepo.id} repo={activeRepo} />
-            </Suspense>
-          ) : (
-            <div className="main-body">
-              <p className="empty">No repo selected.</p>
-              <p className="note">Add a repo in Settings first — the terminal opens in that repo&apos;s directory.</p>
-            </div>
-          )
-        ) : view === 'chat' ? (
-          activeAgent ? (
+        {view === 'trail' && selected && <TrailView trail={selected} />}
+        {view === 'trail' && !selected && <TrailsEmpty onOpenTerminal={() => setView('terminal')} />}
+        {view === 'chat' &&
+          (activeAgent ? (
             <AgentChat key={activeAgent.paneId} agent={activeAgent} />
           ) : (
             <div className="main-body">
@@ -407,12 +571,36 @@ export default function App() {
               <p className="note">
                 {herdr && !herdr.installed
                   ? 'herdr is not installed on this machine — start herdr and come back.'
-                  : 'Pick a live agent in Settings first — chat talks to it by pane_id.'}
+                  : 'Pick a live agent from the switcher by Lain — chat talks to it by pane_id.'}
               </p>
             </div>
-          )
-        ) : (
-          <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} />
+          ))}
+        {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} />}
+        {termMounted && (
+          <div className={`terminal-view ${view === 'terminal' ? '' : 'hidden'}`}>
+            <div className="terminal-toolbar">
+              <button className="icon-btn" onClick={() => addTermPane()}>
+                ＋ Split
+              </button>
+              <button className="icon-btn" onClick={() => addTermPane('herdr')}>
+                ▤ Open herdr
+              </button>
+              <span className="note">Panes stay alive when you switch tabs. “Open herdr” boots the herdr TUI in a pane.</span>
+            </div>
+            <div className="terminal-panes">
+              <Suspense
+                fallback={
+                  <div className="main-body">
+                    <p className="empty">Loading terminal…</p>
+                  </div>
+                }
+              >
+                {termPanes.map((p) => (
+                  <TerminalPanel key={p.id} pane={p} onClose={termPanes.length > 1 ? () => closeTermPane(p.id) : undefined} />
+                ))}
+              </Suspense>
+            </div>
+          </div>
         )}
       </main>
     </div>

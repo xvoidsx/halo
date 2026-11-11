@@ -52,8 +52,8 @@ app.whenReady().then(() => {
       win?.webContents.send('halo:term-exit', { id, code });
     },
   );
-  ipcMain.handle('halo:term-spawn', (_e, repoId: string, cwd: string, cols: number, rows: number) =>
-    termManager.spawn(repoId, cwd, cols, rows),
+  ipcMain.handle('halo:term-spawn', (_e, repoId: string, cwd: string, cols: number, rows: number, command?: string) =>
+    termManager.spawn(repoId, cwd, cols, rows, command),
   );
   ipcMain.handle('halo:term-write', (_e, id: string, data: string) => termManager.write(id, data));
   ipcMain.handle('halo:term-resize', (_e, id: string, cols: number, rows: number) =>

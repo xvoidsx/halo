@@ -58,52 +58,100 @@ function runHerdr(args: string[]): Promise<{ code: number; stdout: string; stder
 
 /** Is the herdr CLI present, and what can it tell us? */
 export async function detectHerdr(): Promise<HerdrState> {
-  const { code, stdout, stderr } = await runHerdr(['agent', 'list']);
-  if (code === -1) {
+  // Try machine-readable output first; fall back to the human table.
+  // --json may not exist on older herdr versions — a non-zero exit
+  // there just means "try the plain list", not "herdr is broken".
+  const json = await runHerdr(['agent', 'list', '--json']);
+  if (json.code === 0) {
+    const agents = parseAgentList(json.stdout, true);
+    if (agents !== null) {
+      return { installed: true, detail: 'herdr is installed.', agents };
+    }
+  }
+  const plain = await runHerdr(['agent', 'list']);
+  if (plain.code === -1) {
     return { installed: false, detail: 'herdr is not installed (not on PATH).', agents: [] };
   }
-  if (code !== 0) {
+  if (plain.code !== 0) {
     return {
       installed: true,
-      detail: `herdr responded with an error: ${stderr.trim() || stdout.trim() || `exit ${code}`}`,
+      detail: `herdr responded with an error: ${(plain.stderr || plain.stdout).trim() || `exit ${plain.code}`}`,
       agents: [],
     };
   }
-  return { installed: true, detail: 'herdr is installed.', agents: parseAgentList(stdout) };
+  const agents = parseAgentList(plain.stdout, false);
+  if (agents === null) {
+    // Output we cannot parse into addressable agents. Say so, show the
+    // raw text, and never fabricate a pane_id — a fake target fails
+    // confusingly when chat tries to use it.
+    const raw = plain.stdout.trim().slice(0, 400);
+    return {
+      installed: true,
+      detail: raw
+        ? `herdr answered in a format Halo cannot parse yet — raw output: ${raw}`
+        : 'herdr answered, but listed no agents.',
+      agents: [],
+    };
+  }
+  return { installed: true, detail: 'herdr is installed.', agents };
 }
 
-/** Best-effort parse of `herdr agent list` output. Never fabricates agents. */
-function parseAgentList(stdout: string): HerdrAgent[] {
+/**
+ * Parse `herdr agent list` output into addressable agents.
+ * Returns null when the output cannot be parsed into real pane_ids
+ * (caller reports the raw text honestly instead of guessing).
+ * Never fabricates a pane_id: an agent without one cannot be chatted
+ * with, and a fake one fails confusingly.
+ */
+function parseAgentList(stdout: string, asJson: boolean): HerdrAgent[] | null {
   const text = stdout.trim();
   if (!text) return [];
-  // Try JSON first (object or array form).
-  try {
-    const parsed: unknown = JSON.parse(text);
-    const list = Array.isArray(parsed) ? parsed : (parsed as { agents?: unknown[] }).agents ?? [];
-    return (list as Record<string, unknown>[])
-      .filter((a) => typeof a === 'object' && a !== null)
-      .map((a) => ({
-        paneId: String(a.pane_id ?? a.paneId ?? a.id ?? ''),
-        label: String(a.agent ?? a.label ?? a.harness ?? 'unknown'),
-        status: 'idle' as const,
-        detail: 'reported by `herdr agent list`',
-      }))
-      .filter((a) => a.paneId !== '');
-  } catch {
-    // Not JSON — fall back to one agent per non-empty line, label only.
-    // TODO: replace with the real output format once observed on a
-    // machine with herdr installed. Do not guess at columns.
-    return text
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((line, i) => ({
-        paneId: `line-${i}`,
-        label: line,
-        status: 'idle' as const,
-        detail: 'unparsed `herdr agent list` output — format not yet verified',
-      }));
+  if (asJson) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      const list = Array.isArray(parsed) ? parsed : (parsed as { agents?: unknown[] }).agents ?? [];
+      return (list as Record<string, unknown>[])
+        .filter((a) => typeof a === 'object' && a !== null)
+        .map((a) => ({
+          paneId: String(a.pane_id ?? a.paneId ?? a.id ?? ''),
+          label: String(a.agent ?? a.label ?? a.harness ?? 'unknown'),
+          status: 'idle' as const,
+          detail: 'reported by `herdr agent list`',
+        }))
+        .filter((a) => a.paneId !== '');
+    } catch {
+      return null;
+    }
   }
+  // Human table: one agent per row. herdr addresses panes by tmux-style
+  // pane_id (%N); a row without one is not an addressable agent.
+  // Skip headers and rule lines, keep only rows carrying a %N token.
+  const agents: HerdrAgent[] = [];
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^[-─═_|+]+$/.test(line.replace(/[\s|]/g, ''))) continue;
+    if (/pane/i.test(line) && /agent/i.test(line)) continue;
+    const pane = line.match(/%\d+/);
+    if (!pane) continue;
+    const label = line
+      .replace(pane[0], '')
+      .replace(/[│|]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+      .join(' ');
+    agents.push({
+      paneId: pane[0],
+      label: label || 'unknown',
+      status: 'idle' as const,
+      detail: 'reported by `herdr agent list`',
+    });
+  }
+  // Empty table body (e.g. "No agents running") parses to zero agents —
+  // that is a real answer, not a parse failure.
+  if (agents.length === 0 && /no agents/i.test(text)) return [];
+  if (agents.length === 0) return null;
+  return agents;
 }
 
 export async function listHerdrAgents(): Promise<HerdrState> {

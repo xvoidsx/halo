@@ -31,8 +31,8 @@ contextBridge.exposeInMainWorld('halo', {
     ipcRenderer.invoke('halo:agent-read', paneId, lines),
 
   // In-app terminal — one shell per repo, cwd = the repo path.
-  termSpawn: (repoId: string, cwd: string, cols: number, rows: number): Promise<TermSpawnResult> =>
-    ipcRenderer.invoke('halo:term-spawn', repoId, cwd, cols, rows),
+  termSpawn: (repoId: string, cwd: string, cols: number, rows: number, command?: string): Promise<TermSpawnResult> =>
+    ipcRenderer.invoke('halo:term-spawn', repoId, cwd, cols, rows, command),
   termWrite: (id: string, data: string): Promise<TermOpResult> => ipcRenderer.invoke('halo:term-write', id, data),
   termResize: (id: string, cols: number, rows: number): Promise<TermOpResult> =>
     ipcRenderer.invoke('halo:term-resize', id, cols, rows),

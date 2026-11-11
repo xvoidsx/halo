@@ -1,17 +1,19 @@
 // In-app terminal — xterm.js in the renderer, node-pty shell in main.
 //
-// One terminal per repo, opened in that repo's directory. WebGL renderer
-// with a canvas fallback (WebGL can fail on old hardware — the terminal
+// One pane, one shell: each pane spawns its own shell in its own
+// directory (home when no directory is given — a terminal never needs
+// a repo). `command` runs a program directly instead of the login
+// shell: 'herdr' boots the herdr TUI in the pane. WebGL renderer with
+// a canvas fallback (WebGL can fail on old hardware — the terminal
 // must still work). No shell is ever faked: if there is no Electron
-// bridge, or the repo path does not exist on this machine, the panel says
-// so instead of showing a dead prompt.
+// bridge, or the directory does not exist on this machine, the panel
+// says so instead of showing a dead prompt.
 
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
-import type { RepoEntry } from './types.js';
 
 const NIGHTSHADE: Record<string, string> = {
   background: '#000000',
@@ -36,7 +38,23 @@ const NIGHTSHADE: Record<string, string> = {
   brightWhite: '#ffffff',
 };
 
-export default function TerminalPanel({ repo }: { repo: RepoEntry }) {
+export interface TermPane {
+  id: string;
+  /** Shown in the pane bar, e.g. a repo name, 'shell', or 'herdr'. */
+  title: string;
+  /** Directory the shell starts in. Empty = home. */
+  cwd: string;
+  /** Program to run instead of the login shell, e.g. 'herdr'. */
+  command?: string;
+}
+
+export default function TerminalPanel({
+  pane,
+  onClose,
+}: {
+  pane: TermPane;
+  onClose?: () => void;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState('Starting terminal…');
   const [failed, setFailed] = useState('');
@@ -104,7 +122,7 @@ export default function TerminalPanel({ repo }: { repo: RepoEntry }) {
     observer.observe(host);
 
     void window.halo
-      .termSpawn(repo.id, repo.path, term.cols, term.rows)
+      .termSpawn(pane.id, pane.cwd, term.cols, term.rows, pane.command)
       .then((res) => {
         if (disposed) {
           if (res.ok && res.id) void window.halo?.termKill(res.id);
@@ -140,14 +158,19 @@ export default function TerminalPanel({ repo }: { repo: RepoEntry }) {
       fit.dispose();
       term.dispose();
     };
-  }, [repo.id, repo.path]);
+  }, [pane.id, pane.cwd, pane.command]);
 
   return (
     <div className="terminal-wrap">
       <div className="terminal-bar">
-        <span className="t-repo">{repo.name}</span>
-        <span className="t-path">{repo.path}</span>
+        <span className="t-repo">{pane.title}</span>
+        <span className="t-path">{pane.cwd || 'home'}</span>
         {status && <span className="t-status">{status}</span>}
+        {onClose && (
+          <button className="t-close" onClick={onClose} title="Close this pane">
+            ✕
+          </button>
+        )}
       </div>
       {failed ? (
         <div className="terminal-failed">
