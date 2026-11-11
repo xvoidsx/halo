@@ -42,8 +42,8 @@ const expr = `(async () => {
   out.noTestHaibane = !document.body.textContent.includes('trails-test') && !document.body.textContent.includes('haibane');
   out.noOpencodeDefault = !document.body.textContent.includes('OpenCode as the test agent');
   out.logoGlow = getComputedStyle(q('.brand h1')).animationName;
-  out.switcher = !!q('.lain-chip');
-  q('.lain-chip')?.click();
+  out.switcher = !!q('.agents-chip');
+  q('.agents-chip')?.click();
   await new Promise((r) => setTimeout(r, 400));
   out.switcherOpen = !!q('.switcher-pop');
   out.switcherRefresh = !!btnByText('Refresh agents');

@@ -176,3 +176,10 @@ what to build, where things live, and the lessons that apply here.
 User-facing strings name the actor and point at the next step ("herdr is
 not installed (not on PATH)" beats "something went wrong"). No dead ends,
 no bare error codes in the UI.
+
+## Herdr CLI — verified live against 0.9.5 (2026-11-11)
+- **`herdr agent list` is a JSON envelope**: `{"id":"cli:agent:list","result":{"agents":[…],"type":"agent_list"}}`. The payload is under `result.agents` — there is NO top-level `agents` key. 0.2.0 parsed `parsed.agents ?? []` and silently showed zero agents with pi running. Never read a shape mismatch as an empty list: unrecognized JSON returns null and the raw output is shown (scripts/herdr-parser-test.mjs covers the live envelope).
+- **Agent records**: `agent` (detected label, e.g. "pi"), `agent_status` (idle|working|blocked|unknown|done), `name` (unique agent name), `pane_id` (workspace-qualified, e.g. "w1:p1"), `terminal_id`, `cwd`, `focused`. Targets accept a pane_id or a unique agent name — never a bare kind label (`attach opencode` → agent_not_found).
+- **`herdr agent send` does NOT exist** (prints the help text). Chat sends via **`herdr agent prompt <target> "<text>"`** — types AND submits in one call. `agent read <target> --source recent-unwrapped --lines N` returns plain text. `agent get` returns `{"result":{"agent":{…}}}`. `herdr api snapshot` returns the full live state (`result.snapshot.agents`).
+- **Verifying locally**: install herdr 0.9.5 from https://herdr.dev/install.sh (script inspected 2026-11-11: manifest fetch + SHA-256-verified binary, no sudo), `herdr server` in the background, then a fake agent: a tiny C program named `pi` (prints a prompt, sleeps) on PATH + `herdr agent start fakepi --kind pi --pane w1:p1`. `agent list` then shows it. scripts/herdr-e2e-test.mjs drives the packaged app against that server (switcher shows the agent, agentSend + agentRead round-trip). Clean up after: `herdr server stop`, remove the fake binary.
+- **Protocol mismatch**: a CLI newer than the server fails with `protocol_mismatch`; surface the error, don't pretend all is well.

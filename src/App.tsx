@@ -65,9 +65,11 @@ const BYOK_PROVIDERS = [
   },
 ] as const;
 
-/** Lain's presence pill, which opens the agent switcher: Lain herself
- * plus every live herdr agent, with status lights. Picking an agent
- * makes it the chat target. Frosted dropdown, never a separate page. */
+/** The Agents switcher: every live herdr agent, with status lights.
+ * Picking one makes it the chat target. The pill is deliberately
+ * generic — Halo runs where Lain is not a thing, and Lain shows up in
+ * this list herself only once she is a live agent. Frosted dropdown,
+ * never a separate page. */
 function AgentSwitcher({
   herdr,
   activePaneId,
@@ -80,21 +82,18 @@ function AgentSwitcher({
   onRefresh: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const live = herdr?.agents.length ?? 0;
   return (
-    <div className="lain-switch">
-      <button className="lain-chip" onClick={() => setOpen((o) => !o)} title="Switch chat agent">
-        <span>✦ Lain</span>
-        <span className="dot">● online ▾</span>
+    <div className="agents-switch">
+      <button className="agents-chip" onClick={() => setOpen((o) => !o)} title="Switch chat agent">
+        <span>Agents</span>
+        <span className="dot">{herdr ? (herdr.installed ? `● ${live} live ▾` : '● herdr? ▾') : '● … ▾'}</span>
       </button>
       {open && (
         <>
           <button className="switcher-backdrop" onClick={() => setOpen(false)} aria-label="Close agent switcher" />
           <div className="switcher-pop">
-            <div className="switcher-row switcher-head">
-              <span>✦ Lain</span>
-              <span className="dot">● online — your Halo host</span>
-            </div>
-            <h4>Agents — herdr</h4>
+            <h4>Live agents — herdr</h4>
             {!herdr && <p className="note">Checking herdr…</p>}
             {herdr && !herdr.installed && <p className="note warn">● {herdr.detail}</p>}
             {herdr && herdr.installed && herdr.agents.length === 0 && (
@@ -571,7 +570,7 @@ export default function App() {
               <p className="note">
                 {herdr && !herdr.installed
                   ? 'herdr is not installed on this machine — start herdr and come back.'
-                  : 'Pick a live agent from the switcher by Lain — chat talks to it by pane_id.'}
+                  : 'Pick a live agent from the Agents switcher — chat talks to it by pane_id.'}
               </p>
             </div>
           ))}

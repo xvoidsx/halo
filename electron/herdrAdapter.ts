@@ -5,35 +5,35 @@
 // is herdr's business, not Halo's, so the engine can be swapped later
 // without touching this interface.
 //
-// What is real today:
-// - detectHerdr() / listAgents(): shells out to the real `herdr` CLI.
-//   `herdr agent list` exists in the real runtime; it reports the detected
-//   agent label and the pane_id (the always-addressable target). The exact
-//   output shape is NOT documented well enough to parse strictly, so
-//   listAgents() tries JSON first, then falls back to raw lines, and never
-//   fabricates a status it did not observe. If herdr is not installed, the
-//   result says so plainly instead of pretending.
-// - Everything else is a clearly-marked stub. Do NOT invent herdr APIs or
-//   fake a live connection: a stub that says "not implemented" is correct.
+// Verified live against herdr 0.9.5 (sandbox, 2026-11-11, real server +
+// a test agent started with `agent start`):
+// - `herdr agent list` prints a JSON ENVELOPE by default — no --json
+//   flag needed: {"id":"cli:agent:list","result":{"agents":[…],"type":
+//   "agent_list"}}. The payload lives under result.agents; a top-level
+//   `agents` key does not exist, and treating its absence as "no agents"
+//   is exactly how 0.2.0 silently showed zero agents with pi running.
+//   Never read a shape mismatch as an empty list: unrecognized JSON
+//   returns null and the raw output is shown instead.
+// - Agent records carry `agent` (detected label, e.g. "pi"),
+//   `agent_status` (idle|working|blocked|unknown|done), `name` (unique
+//   agent name), and `pane_id` (workspace-qualified, e.g. "w1:p1").
+//   Targets accept a pane_id or a unique agent name — never a bare
+//   kind label ("attach opencode" -> agent_not_found, seen on Raven's
+//   machine). Halo addresses by pane_id, falling back to the name.
+// - `herdr agent prompt <target> "<text>"` types AND submits in one
+//   call. `herdr agent send` does NOT exist (it prints the help text) —
+//   the 0.1.x chat used it and would have failed on every send.
+// - `herdr agent read <target> --source recent-unwrapped --lines N`
+//   returns plain text, not JSON.
+// - `herdr agent get <target>` returns {"result":{"agent":{…}}}.
+// - A CLI newer than the server fails with protocol_mismatch; the
+//   error surfaces in `detail` instead of pretending all is well.
 //
 // TODO (once the first real trail exists):
 // - listTrails(): source from the Entire CLI (`entire trail list` / show)
 //   or from herdr once a trails surface is agreed. Currently no trail
 //   data is served at all — the list is empty until then.
 // - runTrail() / watchTrail(): stream trail events into the renderer.
-// - Agent chat (sendAgentMessage / readAgentOutput below) is wired to the
-//   real CLI surface, but NOT yet verified on a machine with herdr
-//   installed: `agent send` + `agent send-keys enter` + `agent read` are
-//   documented in herdr's CLI reference (herdr.dev, v0.7–0.9), and the
-//   adapter surfaces CLI errors honestly instead of faking a reply. Bench
-//   the chat on a real machine before trusting it. `agent attach` is
-//   deliberately NOT used for chat — it takes over the current terminal,
-//   which is not something a GUI window can do.
-//
-// Agent targeting rule, always: address by pane_id. The `agent` field in
-// `herdr agent list` is a display label, not a target — attach/read do
-// not resolve bare labels on Raven's machine (attach opencode ->
-// agent_not_found). pane_id is the always-addressable target.
 
 import { execFile } from 'node:child_process';
 import type { AgentReadResult, AgentSendResult, HerdrAgent, HerdrState } from '../src/types.js';
@@ -56,35 +56,31 @@ function runHerdr(args: string[]): Promise<{ code: number; stdout: string; stder
   });
 }
 
-/** Is the herdr CLI present, and what can it tell us? */
+/** Is the herdr CLI present, and what can it tell us?
+ * `agent list` prints a JSON envelope by default, so the plain call
+ * goes first; --json is only a fallback for older versions. */
 export async function detectHerdr(): Promise<HerdrState> {
-  // Try machine-readable output first; fall back to the human table.
-  // --json may not exist on older herdr versions — a non-zero exit
-  // there just means "try the plain list", not "herdr is broken".
-  const json = await runHerdr(['agent', 'list', '--json']);
-  if (json.code === 0) {
-    const agents = parseAgentList(json.stdout, true);
-    if (agents !== null) {
-      return { installed: true, detail: 'herdr is installed.', agents };
-    }
-  }
   const plain = await runHerdr(['agent', 'list']);
+  if (plain.code === 0) return finishDetection(plain.stdout);
   if (plain.code === -1) {
     return { installed: false, detail: 'herdr is not installed (not on PATH).', agents: [] };
   }
-  if (plain.code !== 0) {
-    return {
-      installed: true,
-      detail: `herdr responded with an error: ${(plain.stderr || plain.stdout).trim() || `exit ${plain.code}`}`,
-      agents: [],
-    };
-  }
-  const agents = parseAgentList(plain.stdout, false);
+  const json = await runHerdr(['agent', 'list', '--json']);
+  if (json.code === 0) return finishDetection(json.stdout);
+  return {
+    installed: true,
+    detail: `herdr responded with an error: ${(plain.stderr || plain.stdout).trim() || `exit ${plain.code}`}`,
+    agents: [],
+  };
+}
+
+function finishDetection(stdout: string): HerdrState {
+  const agents = parseAgentList(stdout);
   if (agents === null) {
     // Output we cannot parse into addressable agents. Say so, show the
     // raw text, and never fabricate a pane_id — a fake target fails
     // confusingly when chat tries to use it.
-    const raw = plain.stdout.trim().slice(0, 400);
+    const raw = stdout.trim().slice(0, 400);
     return {
       installed: true,
       detail: raw
@@ -101,38 +97,85 @@ export async function detectHerdr(): Promise<HerdrState> {
  * Returns null when the output cannot be parsed into real pane_ids
  * (caller reports the raw text honestly instead of guessing).
  * Never fabricates a pane_id: an agent without one cannot be chatted
- * with, and a fake one fails confusingly.
+ * with, and a fake one fails confusingly. Exported for the parser test
+ * (scripts/herdr-parser-test.mjs) — it runs against the live envelope
+ * captured from herdr 0.9.5.
  */
-function parseAgentList(stdout: string, asJson: boolean): HerdrAgent[] | null {
+export function parseAgentList(stdout: string): HerdrAgent[] | null {
   const text = stdout.trim();
   if (!text) return [];
-  if (asJson) {
-    try {
-      const parsed: unknown = JSON.parse(text);
-      const list = Array.isArray(parsed) ? parsed : (parsed as { agents?: unknown[] }).agents ?? [];
-      return (list as Record<string, unknown>[])
-        .filter((a) => typeof a === 'object' && a !== null)
-        .map((a) => ({
-          paneId: String(a.pane_id ?? a.paneId ?? a.id ?? ''),
-          label: String(a.agent ?? a.label ?? a.harness ?? 'unknown'),
-          status: 'idle' as const,
-          detail: 'reported by `herdr agent list`',
-        }))
-        .filter((a) => a.paneId !== '');
-    } catch {
-      return null;
-    }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const list = extractAgents(parsed);
+    if (list === null) return null;
+    return mapAgents(list);
+  } catch {
+    return parseTable(text);
   }
-  // Human table: one agent per row. herdr addresses panes by tmux-style
-  // pane_id (%N); a row without one is not an addressable agent.
-  // Skip headers and rule lines, keep only rows carrying a %N token.
+}
+
+/** Pull the agents array out of herdr's JSON envelope. The payload
+ * lives under result.agents; a top-level `agents` key does not exist.
+ * Returns null when no recognizable agents container is present — a
+ * shape mismatch is NOT an empty list. */
+function extractAgents(parsed: unknown): Record<string, unknown>[] | null {
+  if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (Array.isArray(obj.agents)) return obj.agents as Record<string, unknown>[];
+  const result = obj.result;
+  if (typeof result === 'object' && result !== null) {
+    const r = result as Record<string, unknown>;
+    if (Array.isArray(r.agents)) return r.agents as Record<string, unknown>[];
+    if (typeof r.agent === 'object' && r.agent !== null) return [r.agent as Record<string, unknown>];
+  }
+  if (typeof obj.agent === 'object' && obj.agent !== null) return [obj.agent as Record<string, unknown>];
+  return null;
+}
+
+function mapAgents(list: unknown[]): HerdrAgent[] {
+  return (list as Record<string, unknown>[])
+    .filter((a) => typeof a === 'object' && a !== null)
+    .map((a) => {
+      const kind = String(a.agent ?? a.kind ?? a.label ?? '');
+      const name = String(a.name ?? '');
+      return {
+        // pane_id is the always-addressable target (w1:p1); a unique
+        // agent name is the documented fallback target.
+        paneId: String(a.pane_id ?? a.paneId ?? a.name ?? ''),
+        label: name || kind || 'unknown',
+        status: mapHerdrStatus(String(a.agent_status ?? a.status ?? a.state ?? 'unknown')),
+        detail: name && kind && name !== kind ? `kind: ${kind}` : 'reported by `herdr agent list`',
+      };
+    })
+    .filter((a) => a.paneId !== '');
+}
+
+function mapHerdrStatus(s: string): HerdrAgent['status'] {
+  switch (s) {
+    case 'working':
+      return 'running';
+    case 'idle':
+      return 'idle';
+    case 'blocked':
+      return 'error';
+    case 'done':
+      return 'idle';
+    default:
+      return 'not-detected';
+  }
+}
+
+/** Human-table safety net (`agent list` is JSON by default, so this
+ * should rarely run). Pane ids are workspace-qualified: w1:p2. */
+function parseTable(text: string): HerdrAgent[] | null {
   const agents: HerdrAgent[] = [];
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
     if (/^[-─═_|+]+$/.test(line.replace(/[\s|]/g, ''))) continue;
     if (/pane/i.test(line) && /agent/i.test(line)) continue;
-    const pane = line.match(/%\d+/);
+    const pane = line.match(/w\d+:p\d+/);
     if (!pane) continue;
     const label = line
       .replace(pane[0], '')
@@ -181,44 +224,32 @@ export async function watchTrail(_trailId: string): Promise<NotImplemented> {
   };
 }
 
-// --- Agent chat: send + read, by pane_id only. ---------------------------
+// --- Agent chat: prompt + read, by pane_id only. --------------------------
 //
-// Documented herdr CLI surface (herdr.dev CLI reference, v0.7–0.9):
-// - `herdr agent send <target> <text>` writes LITERAL text to the
-//   agent's pane — no Enter. Follow it with `agent send-keys <target>
-//   enter` to submit, exactly like typing a prompt and pressing Enter.
-// - `herdr agent read <target> --source recent-unwrapped --lines N`
-//   prints the pane's terminal text directly (UTF-8, ANSI stripped by
-//   default) — plain text, not JSON.
-// - `herdr agent attach <target>` takes over the current terminal. Halo
-//   never uses it: a GUI window cannot take over a terminal.
-// NOT yet verified on a machine with herdr installed — herdr is absent
-// in this sandbox. Every failure here is surfaced to the UI as an error,
-// never papered over with a fabricated reply.
+// Verified live against herdr 0.9.5 (sandbox, 2026-11-11): `agent
+// prompt` types the text AND submits it in one call — the prompt landed
+// in the agent's pane and `agent read` showed it back. `agent send`
+// does not exist in 0.9.x. `agent attach` is deliberately NOT used for
+// chat — it takes over the current terminal, which is not something a
+// GUI window can do. Every failure here is surfaced to the UI as an
+// error, never papered over with a fabricated reply.
 
-/** Type a message into an agent's pane and press Enter to submit it. */
+/** Submit a prompt to an agent's pane (types + submits, one call). */
 export async function sendAgentMessage(paneId: string, text: string): Promise<AgentSendResult> {
   if (!paneId || !paneId.trim()) {
-    return { ok: false, detail: 'No agent selected — pick a live agent in Settings first.' };
+    return { ok: false, detail: 'No agent selected — pick a live agent first.' };
   }
   if (!text.trim()) {
     return { ok: false, detail: 'Nothing to send.' };
   }
-  const sent = await runHerdr(['agent', 'send', paneId, text]);
-  if (sent.code === -1) {
+  const res = await runHerdr(['agent', 'prompt', paneId, text]);
+  if (res.code === -1) {
     return { ok: false, detail: 'herdr is not installed (not on PATH).' };
   }
-  if (sent.code !== 0) {
+  if (res.code !== 0) {
     return {
       ok: false,
-      detail: `herdr agent send failed: ${(sent.stderr || sent.stdout).trim() || `exit ${sent.code}`}`,
-    };
-  }
-  const enter = await runHerdr(['agent', 'send-keys', paneId, 'enter']);
-  if (enter.code !== 0) {
-    return {
-      ok: false,
-      detail: `Your text was typed into the pane, but Enter did not land: ${(enter.stderr || enter.stdout).trim() || `exit ${enter.code}`}`,
+      detail: `herdr agent prompt failed: ${(res.stderr || res.stdout).trim() || `exit ${res.code}`}`,
     };
   }
   return { ok: true, detail: 'Sent to the agent.' };
@@ -227,7 +258,7 @@ export async function sendAgentMessage(paneId: string, text: string): Promise<Ag
 /** Read an agent's recent pane output as plain text. */
 export async function readAgentOutput(paneId: string, lines = 120): Promise<AgentReadResult> {
   if (!paneId || !paneId.trim()) {
-    return { ok: false, paneId, output: '', detail: 'No agent selected — pick a live agent in Settings first.' };
+    return { ok: false, paneId, output: '', detail: 'No agent selected — pick a live agent first.' };
   }
   const res = await runHerdr(['agent', 'read', paneId, '--source', 'recent-unwrapped', '--lines', String(lines)]);
   if (res.code === -1) {
