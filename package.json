@@ -39,5 +39,5 @@
     "dist": "npm run build && electron-builder --linux --publish never"
   },
   "type": "module",
-  "version": "0.1.2"
+  "version": "0.1.7"
 }

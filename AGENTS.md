@@ -107,20 +107,50 @@ what to build, where things live, and the lessons that apply here.
   the deb is verified with `dpkg-deb -c` (desktop + icon must be 644,
   binary 755) before every upload. `build/icon.png` itself is chmod 644 in
   the tree too, since fpm preserves source modes.
+- **dpkg never fixes the mode of a directory that already exists.**
+  The 0.1.0/0.1.1 debs (built under umask 007) left `/opt/Halo` and its
+  subdirs as 770 root:root; upgrades replaced the files but not the dir
+  modes, so rofi launches failed with "Permission denied" even though
+  the binary was 755. Fixed by `deb.afterInstall`
+  (`scripts/after-install.sh`) normalizing `/opt/Halo` dirs to 755, and
+  by packing under `umask 022`. Verify every deb by installing it over
+  the stale build and launching as an unprivileged user.
+- **Native modules in the ESM main process: load by dynamic import()
+  of the real unpacked file.** `import 'node-pty'` fails (Node's ESM
+  loader ignores Electron's `app.asar.unpacked` redirect),
+  `require('node-pty')` via createRequire fails (a require rooted at an
+  asar file:// URL does not walk into app.asar/node_modules), and even
+  `require(<absolute unpacked path>)` fails under Electron — while the
+  same absolute require works fine under plain node, and both the asar
+  copy and the unpacked copy of the package are complete. The fix that
+  actually loads: `await import(pathToFileURL(<unpacked>/lib/index.js))`,
+  loaded lazily in TerminalManager's constructor with spawn() reporting
+  "still loading" honestly until it lands. Corollary: smoke-test the
+  PACKAGED app (install the .deb, launch as an unprivileged user), not
+  just the dev build — the 0.1.0–0.1.5 Terminal was silently broken in
+  the package while the dev smoke test passed.
+- **fpm stages the whole unpacked app (~500 MB) under TMPDIR**, and
+  /tmp here is a 512M tmpfs — the 0.1.1 pack died in `tar` (exit 2) with
+  /tmp part-full. Build with `TMPDIR=~/workspace/.tmp npm run pack`
+  (workspace has room) and keep /tmp clear of big scratch files.
 - **App icon lives at `build/icon.png`** (1600x1600, neon halo ring,
-  nightshadeNeon). electron-builder picks it up by default and renders the
-  hicolor sizes — no icon config needed. Never ship the default Electron
-  icon again.
+  nightshadeNeon) plus the generated standard sizes in `build/icons/`
+  (16–512px). The 1600-only icon never showed in rofi — it looks up
+  standard hicolor sizes. Regenerate the sizes from icon.png (PIL
+  LANCZOS) whenever the source icon changes, chmod 644.
 - **Launcher identity:** `desktopName: org.xvoidsx.halo` in package.json +
   `linux.syncDesktopName: true` in electron-builder.yml, so the Wayland
   app_id / WM_CLASS matches the .desktop entry and the launcher links the
   running window to it.
 - **`/usr/bin/halo` comes from the default postinst** (update-alternatives
   symlink to /opt/Halo/halo, fallback `ln -sf`) — do NOT add a custom
-  afterInstall script for it. If `halo` is "command not found" after
-  install, the package was never configured: `dpkg -i` without deps
-  installed leaves postinst unrun — finish with `sudo apt -f install`
-  (or install with `sudo apt install ./halo_*.deb`, which resolves deps).
+  afterInstall script for the symlink. A `deb.afterInstall` script DOES
+  exist now, but only for permission healing (`scripts/after-install.sh`:
+  /opt/Halo dirs to 755) — see the dpkg-dir-modes lesson above.
+  If `halo` is "command not found" after install, the package was never
+  configured: `dpkg -i` without deps installed leaves postinst unrun —
+  finish with `sudo apt -f install` (or install with
+  `sudo apt install ./halo_*.deb`, which resolves deps).
 - **Running as root:** Electron FATALS without --no-sandbox, and the check
   fires in Electron's native launcher BEFORE Halo's JS runs — so no in-app
   fix can catch it (verified: a getuid/appendSwitch guard shipped in the

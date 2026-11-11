@@ -10,29 +10,77 @@
 // the renderer. The renderer never touches node-pty directly.
 
 import * as fs from 'node:fs';
-import * as pty from 'node-pty';
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { app } from 'electron';
+import type * as ptyTypes from 'node-pty';
 import type { TermOpResult, TermSpawnResult } from '../src/types.js';
+
+// node-pty is a native module, and in the ESM main process it has to be
+// loaded by dynamic import() of the real unpacked file — every resolver
+// path fails inside the packaged app:
+//   - `import 'node-pty'` — Node's ESM loader ignores Electron's
+//     app.asar.unpacked redirect.
+//   - `require('node-pty')` via createRequire — a require rooted at an
+//     asar file:// URL does not walk into app.asar/node_modules.
+//   - `require(<absolute unpacked path>)` — also fails under Electron
+//     (works under plain node, where the whole chain loads fine), so
+//     Electron's asar patching is what breaks it.
+// A file:// import of the unpacked lib/index.js sidesteps all of that:
+// the file is real, on disk, outside the asar, and its own internal
+// requires resolve from the real unpacked directory. The load is async,
+// so TerminalManager starts it in the constructor and spawn() reports
+// honestly ("still loading" / the load error) until it lands — which is
+// milliseconds after startup, long before anyone opens the terminal tab.
+const ptyDir = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty')
+  : path.join(app.getAppPath(), 'node_modules', 'node-pty');
+const ptyEntry = pathToFileURL(path.join(ptyDir, 'lib', 'index.js')).href;
 
 interface TermSession {
   id: string;
   repoId: string;
   cwd: string;
   shell: string;
-  pty: pty.IPty;
+  pty: ptyTypes.IPty;
 }
 
 export class TerminalManager {
   private terms = new Map<string, TermSession>();
   private counter = 0;
+  private pty: typeof ptyTypes | null = null;
+  private loadError: string | null = null;
+  private loadPromise: Promise<void> | null = null;
 
   constructor(
     private sendData: (id: string, data: string) => void,
     private sendExit: (id: string, code: number) => void,
-  ) {}
+  ) {
+    void this.ensureLoaded();
+  }
+
+  /** Load node-pty once, in the background. Safe to call repeatedly. */
+  private ensureLoaded(): Promise<void> {
+    if (this.loadPromise) return this.loadPromise;
+    this.loadPromise = (async () => {
+      try {
+        const mod = (await import(ptyEntry)) as unknown as { default?: unknown } & typeof ptyTypes;
+        // import() of a CJS module: the real exports live on .default.
+        this.pty = (mod.default ?? mod) as typeof ptyTypes;
+      } catch (err) {
+        this.loadError = `Terminal engine failed to load: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    })();
+    return this.loadPromise;
+  }
 
   /** Spawn a shell in `cwd`. Returns an error (never a fake shell) when
    * the directory does not exist or is not a directory on this machine. */
   spawn(repoId: string, cwd: string, cols: number, rows: number): TermSpawnResult {
+    if (!this.pty) {
+      void this.ensureLoaded();
+      return { ok: false, detail: this.loadError ?? 'Terminal engine is still loading — try again in a moment.' };
+    }
     let stat: fs.Stats;
     try {
       stat = fs.statSync(cwd);
@@ -44,9 +92,9 @@ export class TerminalManager {
     }
     const shell = process.env.SHELL || '/bin/bash';
     const id = `term-${++this.counter}-${Date.now().toString(36)}`;
-    let child: pty.IPty;
+    let child: ptyTypes.IPty;
     try {
-      child = pty.spawn(shell, [], {
+      child = this.pty.spawn(shell, [], {
         name: 'xterm-256color',
         cols: Math.max(20, cols || 80),
         rows: Math.max(5, rows || 24),
