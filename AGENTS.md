@@ -98,12 +98,15 @@ what to build, where things live, and the lessons that apply here.
   `dpkg-deb --info` / `file` that the built deb uses gzip before shipping,
   and verify asar contents (`npx asar list`) + deb permissions
   (`dpkg-deb -c`).
-- **Pack needs room in TMPDIR.** fpm stages the whole unpacked app (~500 MB)
-  under the temp dir, and /tmp here is a 512M tmpfs — the 0.1.1 pack died
-  in `tar` (exit 2) with /tmp part-full. Build with
-  `TMPDIR=~/workspace/.tmp npm run pack` (workspace has room) and keep /tmp
-  clear of big scratch files (a 114M Drive-download check was part of the
-  squeeze).
+- **Pack under `umask 022` — or the .desktop file ships unreadable.**
+  The sandbox umask is 0007, so the generated `.desktop` file and the icon
+  landed in the deb as 660 root:root. Root can read them, your user can't —
+  rofi silently skips entries it can't read, so Halo never appeared in the
+  launcher even though `halo` worked from a terminal (binary is 755). The
+  0.1.2 pack runs `(umask 022; TMPDIR=~/workspace/.tmp npm run pack)` and
+  the deb is verified with `dpkg-deb -c` (desktop + icon must be 644,
+  binary 755) before every upload. `build/icon.png` itself is chmod 644 in
+  the tree too, since fpm preserves source modes.
 - **App icon lives at `build/icon.png`** (1600x1600, neon halo ring,
   nightshadeNeon). electron-builder picks it up by default and renders the
   hicolor sizes — no icon config needed. Never ship the default Electron
