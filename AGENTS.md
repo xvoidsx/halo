@@ -98,7 +98,12 @@ what to build, where things live, and the lessons that apply here.
   `dpkg-deb --info` / `file` that the built deb uses gzip before shipping,
   and verify asar contents (`npx asar list`) + deb permissions
   (`dpkg-deb -c`).
-- Always commit `package-lock.json` — `npm ci` on CI fails without it.
+- **Pack needs room in TMPDIR.** fpm stages the whole unpacked app (~500 MB)
+  under the temp dir, and /tmp here is a 512M tmpfs — the 0.1.1 pack died
+  in `tar` (exit 2) with /tmp part-full. Build with
+  `TMPDIR=~/workspace/.tmp npm run pack` (workspace has room) and keep /tmp
+  clear of big scratch files (a 114M Drive-download check was part of the
+  squeeze).
 - **App icon lives at `build/icon.png`** (1600x1600, neon halo ring,
   nightshadeNeon). electron-builder picks it up by default and renders the
   hicolor sizes — no icon config needed. Never ship the default Electron
