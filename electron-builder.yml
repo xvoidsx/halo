@@ -1,0 +1,24 @@
+# electron-builder config — Halo (Linux .deb only for now)
+# Never run with GH_TOKEN set: it makes electron-builder attempt a GitHub
+# publish and fail the build. Releases are cut separately.
+appId: org.xvoidsx.halo
+productName: Halo
+copyright: Copyright (c) 2026 xvoidsx
+directories:
+  output: release
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+linux:
+  category: Development
+  target:
+    - target: deb
+      arch:
+        - x64
+        - arm64
+deb:
+  maintainer: xvoidsx <rav3ndust.xyz@yandex.com>
+  # Keep the deb gzip-compressed (dpkg-deb here defaults to zstd, which
+  # older dpkg cannot read). Verify with `dpkg-deb --info` before shipping.
+  compression: gz
