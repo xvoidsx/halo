@@ -25,8 +25,9 @@ what to build, where things live, and the lessons that apply here.
   `herdrAdapter.ts` (herdr CLI boundary), `settingsFile.ts`
   (`~/.config/halo/settings.json`).
 - `src/` — renderer (React + Vite): `App.tsx` (sidebar trails, main trail
-  view, settings), `theme.css` (nightshadeNeon), `types.ts` (shared types),
-  `mockTrails.ts` (MOCK data — delete the moment real trail data flows).
+  view, settings), `theme.css` (nightshadeNeon), `types.ts` (shared types).
+  No placeholder data anywhere — an empty trail list means no trail has
+  run yet.
 - `electron-builder.yml` — Linux `.deb` packaging. Output goes to `release/`
   (not `dist/`, which is Vite's renderer output).
 

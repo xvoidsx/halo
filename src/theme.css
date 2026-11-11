@@ -123,14 +123,6 @@ button, input, select { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--line);
 }
 .main-head h2 { margin: 0; font-size: 18px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mock-badge {
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  color: var(--amber);
-  border: 1px solid var(--amber);
-  border-radius: 4px;
-  padding: 2px 8px;
-}
 .icon-btn {
   background: transparent;
   border: 1px solid var(--line);

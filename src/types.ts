@@ -1,7 +1,7 @@
 // Halo shared types. Kept in src/ so both the renderer and the Electron
 // main process (via import from the built bundle's types) agree on shape.
-// Trail data comes from Entire Trails in the real app; until a trail
-// exists, the renderer uses mockTrails.ts (clearly labelled MOCK).
+// Trail data comes from Entire Trails; until a trail exists the list
+// is empty — no placeholder data anywhere in the app.
 
 export type TrailStatus = 'running' | 'review' | 'green' | 'blocked' | 'merged';
 

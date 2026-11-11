@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { mockTrails } from './mockTrails.js';
 import type { AgentStatus, HaloSettings, HerdrState, Trail } from './types.js';
 import { defaultSettings } from './types.js';
 
@@ -25,14 +24,13 @@ function lightClass(status: AgentStatus): string {
   return 'gray';
 }
 
-function TrailView({ trail, mock }: { trail: Trail; mock: boolean }) {
+function TrailView({ trail }: { trail: Trail }) {
   const openFindings = trail.findings.filter((f) => f.status === 'open' || f.status === 'addressing');
   const resolvedCount = trail.findings.length - openFindings.length;
   return (
     <div className="main-body">
       <p className="meta">
         {trail.repo} · {trail.branch} · agent: {trail.agent}
-        {mock ? ' · MOCK DATA — no live trail yet' : ''}
       </p>
 
       <div className="scores">
@@ -228,7 +226,7 @@ function SettingsView({
           onChange={(e) => setSettings({ ...settings, ollama: { ...settings.ollama, defaultModel: e.target.value } })}
         />
       </label>
-      <p className="note">Ollama wiring is a placeholder in this spike — not connected yet.</p>
+      <p className="note">Ollama is not connected yet — the fields save locally for now.</p>
 
       <h3>BYOK providers</h3>
       <p className="note warn">
@@ -261,24 +259,22 @@ function SettingsView({
 
 export default function App() {
   const [view, setView] = useState<View>('trail');
-  const [trails, setTrails] = useState<Trail[]>(mockTrails);
-  const [mock, setMock] = useState(true);
-  const [selectedId, setSelectedId] = useState<string>(mockTrails[0].id);
+  const [trails, setTrails] = useState<Trail[]>([]);
+  const [selectedId, setSelectedId] = useState<string>('');
   const [settings, setSettings] = useState<HaloSettings>(defaultSettings);
   const [herdr, setHerdr] = useState<HerdrState | null>(null);
 
   useEffect(() => {
-    // In Electron the bridge is present; in a plain browser (vite dev)
-    // we fall back to mock data + defaults so the shell is previewable.
+    // No trail data is faked anywhere: the list starts empty and only
+    // fills when a real trail source is wired up. In a plain browser
+    // (vite dev) there is no Electron bridge, so the shell previews empty.
     if (!window.halo) {
-      setTrails(mockTrails);
-      setMock(true);
+      setTrails([]);
       setHerdr({ installed: false, detail: 'No Electron bridge (browser preview).', agents: [] });
       return;
     }
     void window.halo.listTrails().then((res) => {
       setTrails(res.trails);
-      setMock(res.mock);
       if (res.trails[0]) setSelectedId(res.trails[0].id);
     });
     void window.halo.getSettings().then(setSettings);
@@ -300,6 +296,7 @@ export default function App() {
         </div>
         <div className="trail-list">
           <h2>Trails</h2>
+          {trails.length === 0 && <p className="note">No trails yet.</p>}
           {trails.map((t) => (
             <button
               key={t.id}
@@ -328,10 +325,7 @@ export default function App() {
       <main className="main">
         <div className="main-head">
           {view === 'trail' && selected ? (
-            <>
-              <h2>{selected.title}</h2>
-              {mock && <span className="mock-badge">MOCK DATA</span>}
-            </>
+            <h2>{selected.title}</h2>
           ) : (
             <h2>Settings</h2>
           )}
@@ -340,10 +334,15 @@ export default function App() {
           </button>
         </div>
         {view === 'trail' && selected ? (
-          <TrailView trail={selected} mock={mock} />
+          <TrailView trail={selected} />
         ) : view === 'trail' ? (
           <div className="main-body">
-            <p className="empty">No trails yet — run the first one and it will show up here.</p>
+            <p className="empty">No trails yet.</p>
+            <p className="note">
+              Run your first trail with the Entire CLI (OpenCode as the test agent) in a connected repo —
+              trails-test first, then haibane — and it will show up here, live. Nothing here is
+              placeholder data: an empty list means no trail has run yet.
+            </p>
           </div>
         ) : (
           <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} />

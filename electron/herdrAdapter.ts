@@ -18,8 +18,8 @@
 //
 // TODO (once the first real trail exists):
 // - listTrails(): source from the Entire CLI (`entire trail list` / show)
-//   or from herdr once a trails surface is agreed. Currently mock data
-//   only, served by the renderer.
+//   or from herdr once a trails surface is agreed. Currently no trail
+//   data is served at all — the list is empty until then.
 // - runTrail() / watchTrail(): stream trail events into the renderer.
 // - agent attach/read: `herdr agent attach <pane_id>` / `read <pane_id>`
 //   exist; wire them once the settings panel needs to open an agent.
@@ -110,7 +110,7 @@ export interface NotImplemented {
 export async function listTrails(): Promise<NotImplemented> {
   return {
     status: 'not-implemented',
-    todo: 'listTrails(): no live trail source yet — wire to `entire trail list` (or herdr) after the first trail run. Renderer uses mockTrails.ts meanwhile.',
+    todo: 'listTrails(): no live trail source yet — wire to `entire trail list` (or herdr) after the first trail run. Nothing is served until then.',
   };
 }
 
@@ -118,6 +118,6 @@ export async function listTrails(): Promise<NotImplemented> {
 export async function watchTrail(_trailId: string): Promise<NotImplemented> {
   return {
     status: 'not-implemented',
-    todo: 'watchTrail(): live trail event streaming is not built yet. The trail view renders mock data until the Entire CLI surface is agreed.',
+    todo: 'watchTrail(): live trail event streaming is not built yet. The trail list stays empty until the Entire CLI surface is agreed.',
   };
 }

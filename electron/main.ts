@@ -3,7 +3,6 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, settingsPath } from './settingsFile.js';
 import { detectHerdr, listTrails, watchTrail } from './herdrAdapter.js';
-import { mockTrails } from '../src/mockTrails.js';
 import type { HaloSettings } from '../src/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -49,13 +48,11 @@ app.whenReady().then(() => {
     return { ok: true, path: settingsPath() };
   });
 
-  // Trails: MOCK data until a live source exists (see herdrAdapter.ts).
-  // The renderer labels this clearly; nothing here pretends to be live.
-  ipcMain.handle('halo:listTrails', () => ({ mock: true, trails: mockTrails }));
-  ipcMain.handle('halo:getTrail', (_e, id: string) => {
-    const trail = mockTrails.find((t) => t.id === id) ?? null;
-    return { mock: true, trail };
-  });
+  // Trails: no live source is wired up yet, so the list is empty — no
+  // placeholder data is ever served. Wire listTrails() to the Entire
+  // CLI once the first test trail exists (see herdrAdapter.ts).
+  ipcMain.handle('halo:listTrails', () => ({ trails: [] }));
+  ipcMain.handle('halo:getTrail', (_e, _id: string) => ({ trail: null }));
 
   // Herdr: real detection via the herdr CLI; everything else is a stub.
   ipcMain.handle('halo:herdrStatus', () => detectHerdr());

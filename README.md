@@ -4,10 +4,6 @@ A nightshadeNeon-soaked application for running Trails, with your repos and agen
 Halo — a nightshade neon Electron shell that lets herdr run trails locally,
 with your repos and agents in one live view.
 
-Two-week spike foundation (11 Nov 2026). This is the shell, not the finished
-app: the layout, theme, trail view, settings, and the herdr boundary are
-real; live trail data and provider wiring are stubbed on purpose.
-
 ## Run it
 
 ```sh
@@ -23,9 +19,8 @@ npm run dev          # vite dev server on http://127.0.0.1:5173 (browser preview
 npm run dev:electron # electron against the dev server (run `npm run dev` first, in another terminal)
 ```
 
-`npm run dev` in a plain browser also works — the shell falls back to mock
-data when the Electron bridge is absent, so the UI is previewable without
-Electron.
+`npm run dev` in a plain browser also works — the shell previews with an
+empty trail list, since there is no Electron bridge and no placeholder data.
 
 ## What's real
 
@@ -42,32 +37,35 @@ Electron.
   repo/agent, Ollama base URL + default model, BYOK provider keys.
 - Herdr detection: the main process shells out to the real `herdr agent
   list` command. If herdr is not installed, the UI says so plainly.
+- No placeholder data anywhere. An empty trail list means no trail has run
+  yet — the app never shows a trail that didn't happen.
 
-## What's stubbed (on purpose)
+## Not built yet
 
-- **Trail data is MOCK** (`src/mockTrails.ts`, two trails, labelled MOCK DATA
-  in the UI). No real trail exists yet. Delete the mock file the moment real
-  data flows.
-- **`herdrAdapter.listTrails()` / `watchTrail()` are not implemented.**
-  They return a `{ status: 'not-implemented', todo }` payload. The live
-  source will be the Entire CLI once the first test trail exists
-  (Raven is setting that up with OpenCode as the test agent).
+- **Live trail data.** The trail list starts empty and only fills from a
+  real source. Wiring `listTrails()` to the Entire CLI is next, after the
+  first test trail run (trails-test, then haibane, OpenCode as the test
+  agent).
+- **In-app terminal + chatting with herdr agents directly.** Next after live
+  trails — a terminal per repo via xterm.js + node-pty (copland's proven
+  stack), and agent chat by attaching to an agent by `pane_id`, so you can
+  run commands and steer the agent from inside Halo.
 - **`herdr agent list` output parsing is best-effort.** The command exists,
   but its exact output shape is not documented well enough to parse
   strictly — the adapter tries JSON first, then raw lines, and never
   fabricates an agent status it did not observe. Verify the format on a
   machine with herdr installed before trusting the agent list.
-- **Ollama + BYOK are settings placeholders.** The fields exist and persist
+- **Ollama + BYOK are not connected yet.** The fields exist and persist
   locally; nothing connects to Ollama or any provider yet.
 - No telemetry anywhere. Local-first by construction.
 
 ## Next steps
 
-1. Push this scaffold to `xvoidsx/halo` (repo is live:
-   https://github.com/xvoidsx/halo).
-2. First real trail run per the run-sheet (Entire CLI, small repo, OpenCode)
-   — then wire `listTrails()` to the Entire CLI and delete the mock data.
-3. Verify `herdr agent list` output shape on a machine with herdr; tighten
+1. First real trail run per the run-sheet (Entire CLI, trails-test, OpenCode)
+   — then wire `listTrails()` to the Entire CLI.
+2. Verify `herdr agent list` output shape on a machine with herdr; tighten
    the adapter's parser.
+3. In-app terminal + agent chat, so a trail can be run, steered, and
+   commanded from inside Halo from the start.
 4. Ollama wiring (local-first default model) + BYOK provider calls.
-5. Bench on Cloudbook / T440p before calling the spike done.
+5. Bench on Cloudbook / T440p.
