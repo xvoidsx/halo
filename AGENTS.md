@@ -889,6 +889,19 @@ what to build, where things live, and the lessons that apply here.
     watch-stop IPC, orphaning the old watch — `startTrailWatch`
     calls `stopTrailWatch()` first, so a new start always kills
     the previous watch.
+  - **DevTools ports are single-use in this sandbox (2026-11-12).**
+    After an Electron app exits — cleanly, via close-test or
+    otherwise — a phantom LISTEN socket stays on its
+    `--remote-debugging-port` with no owning process (fuser/lsof
+    show nothing, the inode has no holder in /proc), and the
+    next app launched on that port runs fine but serves no
+    DevTools: curl/fetch hang forever, CDP tests stall with no
+    output. 9222 died this way, then 9223 after the packaged
+    close-busy run. Workaround: launch each fresh app instance
+    on a NEW port (9224, …) and pass it to the tests; the port
+    number is just an argument. Do not waste time debugging the
+    app when the port stops responding — check `ss -ltn` for a
+    phantom listener first.
   - **Test fallout from the live badge.** The Trails h2 now
     reads "Trails ● live" when the watch is connected, so three
     older tests' exact `h2.includes('Trails')` assertions failed
