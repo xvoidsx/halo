@@ -55,6 +55,9 @@ export default function TerminalPanel({
   onAttachState,
   onExitState,
   reconnectSignal,
+  focused,
+  onFocus,
+  onContextMenu,
 }: {
   pane: TermPane;
   onClose?: () => void;
@@ -70,8 +73,18 @@ export default function TerminalPanel({
   /** Bumps when the parent wants every dead pane re-spawned. A pane
    * only answers when it is actually dead — a live pane ignores it. */
   reconnectSignal?: number;
+  /** The parent marks one pane focused at a time (for the split
+   * shortcuts and the context menu). When this turns true the panel
+   * takes keyboard focus; when its terminal gains focus it reports
+   * back, so the parent always knows which pane the user is in. */
+  focused?: boolean;
+  onFocus?: (paneId: string) => void;
+  /** Right-click on a pane — the parent shows its context menu
+   * (Split right / Close pane). Only wired for Terminal-tab panes. */
+  onContextMenu?: (e: React.MouseEvent, paneId: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
   const [status, setStatus] = useState('Starting terminal…');
   const [failed, setFailed] = useState('');
   // When the shell exits, the pane offers a way back instead of a dead
@@ -114,6 +127,12 @@ export default function TerminalPanel({
       fontSize: 13,
       theme: NIGHTSHADE,
     });
+    termRef.current = term;
+    // xterm.js has no onFocus event in this version — the terminal's
+    // helper textarea lives inside the host, so a focusin on the host
+    // (it bubbles from the textarea) is the focus signal.
+    const onHostFocusIn = () => onFocus?.(pane.id);
+    host.addEventListener('focusin', onHostFocusIn);
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
@@ -237,6 +256,7 @@ export default function TerminalPanel({
     return () => {
       disposed = true;
       observer.disconnect();
+      host.removeEventListener('focusin', onHostFocusIn);
       offData();
       offExit();
       setAttached(false);
@@ -245,6 +265,7 @@ export default function TerminalPanel({
       onExitState?.(pane.id, false);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       if (termId) void window.halo?.termKill(termId);
+      termRef.current = null;
       try {
         webgl?.dispose();
       } catch {
@@ -254,6 +275,12 @@ export default function TerminalPanel({
       term.dispose();
     };
   }, [pane.id, pane.cwd, pane.command, spawnNonce]);
+
+  // The parent moves keyboard focus between panes (Ctrl+Shift+Arrow).
+  // Focus the terminal when this pane becomes the focused one.
+  useEffect(() => {
+    if (focused) termRef.current?.focus();
+  }, [focused]);
 
   // "Reconnect all" from the parent: re-spawn this pane, but only if
   // it is actually dead. The effect runs only when the signal changes,
@@ -272,7 +299,11 @@ export default function TerminalPanel({
   }, [reconnectSignal]);
 
   return (
-    <div className="terminal-wrap" style={style}>
+    <div
+      className="terminal-wrap"
+      style={style}
+      onContextMenu={onContextMenu ? (e) => onContextMenu(e, pane.id) : undefined}
+    >
       <div className="terminal-bar">
         <span className="t-repo">{pane.title}</span>
         <span className="t-path">{pane.cwd || 'home'}</span>

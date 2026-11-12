@@ -227,6 +227,104 @@ what to build, where things live, and the lessons that apply here.
 - **Proof:** the splits test's opencode check (the race's witness)
   passed 3× in a row on dev and 2× in a row packaged after the
   fix, after failing 2 of 5 before it.
+
+## 0.6.2 — resizable sidebar, pane shortcuts, pane menu (2026-11-12)
+
+- **Resizable sidebar.** Drag handle on the sidebar's right edge
+  (`.sidebar-divider`, 6px, pointer-drag like the terminal
+  dividers), 200–420px, persisted in `localStorage`
+  (`halo.sidebarWidth`). It is a UI preference, not a secret, so it
+  lives in localStorage — not in settings.json, which holds
+  provider keys. `scripts/sidebar-shortcuts-test.mjs` covers the
+  drag, the clamp, and persistence across a reload (18 checks).
+- **Pane shortcuts — Raven's Kitty vocabulary, not a new one.**
+  Ctrl+Shift+D splits the focused pane, Ctrl+Shift+Q (or X) closes
+  it, Ctrl+Shift+Arrow moves focus between panes. Kitty's exact
+  scheme, settled 2026-10-08 (Ctrl+Shift+H is horizontal split
+  there, Ctrl+Shift+V stays paste — neither is used here). No
+  leader key: a Ctrl+B leader would steal herdr's own prefix from
+  any herdr TUI running in a pane. Split works from any tab (it
+  switches to Terminal); close and focus-move only on the Terminal
+  tab, so a hidden pane is never closed by surprise. Split inserts
+  AFTER the focused pane and halves its share (`splitPane`); the
+  Split button uses it too, while "Open herdr" / "Jump to terminal"
+  still append at the end (`addTermPane`).
+- **Capture phase is load-bearing for shortcuts.** The xterm's
+  textarea handles keys before a bubble-phase window listener ever
+  sees them, so a bubble listener is too late — the key is already
+  in the shell. The shortcut listener runs on window with
+  `capture: true` and `stopPropagation()`s only the keys it
+  handles; every other key is left alone. Editable targets (real
+  inputs, non-xterm textareas) are skipped so typing in a settings
+  field is never hijacked.
+- **Right-click pane menu.** `.ctx-menu` at the cursor: Split right
+  (Ctrl+Shift+D) and Close pane (Ctrl+Shift+Q, disabled when it is
+  the only pane). Dismissed by picking an item, clicking elsewhere,
+  or Escape. Terminal-tab panes only — the chat attach has none.
+  React renders the menu on the next tick, so a test must await a
+  beat after dispatching the contextmenu before asserting it exists.
+- **Focus tracking.** TerminalPanel reports focus via a `focusin`
+  listener on its host (xterm.js 6.0.0 has no `onFocus` event on
+  the Terminal type — `tsc` rejects `term.onFocus`). The parent
+  keeps `focusedPaneId`; a pane focuses its terminal when its
+  `focused` prop turns true, and closing a pane moves focus to the
+  neighbour that took its share.
+- **`Number(null)` is 0, not NaN.** The sidebar-width initializer
+  clamped a missing localStorage key to the 200px floor instead of
+  the 280px default, because `Number(null)` is `0` (finite). Check
+  for a null key explicitly before converting.
+- **A ref synced by an effect lags a drag.** The first sidebar
+  persistence saved the pre-drag width: the pointermove/pointerup
+  burst fires before React re-renders and the effect syncs the
+  ref. Update the ref synchronously inside `onMove` instead.
+- **CDP modifier bits are Alt=1, Ctrl=2, Meta=4, Shift=8.**
+  Ctrl+Shift is 10, not 6 — modifiers 6 is Ctrl+Meta, which is why
+  the first shortcut test saw `shift: false, meta: true` and every
+  shortcut silently did nothing. (And a test that asserts a count
+  can pass vacuously when the action never ran — assert the count
+  CHANGED, not just its final value, where it matters.)
+- **UI smoke test needs a fresh launch.** It checks the Trails
+  empty state (`.trail-orbit`, "Waiting on trails"), so it fails
+  on a warm instance sitting on another tab. Restart the app, run
+  it first. Same for the chat-list test — a re-run after the
+  splits/keepalive tests is the honest read.
+
+## Terminal resize propagation — proven, and its limit (2026-11-12)
+
+- **Halo's pty resize is correct.** Measured with `stty size` in a
+  live shell pane: full width 41x140, after split 41x68, after a
+  150px divider drag 41x47 / 41x90 for the 347px / 646px panes.
+  The 150 ms debounce collapses the layout-settling storm into one
+  resize, and the process sees the final size. So when a TUI in a
+  Halo pane renders at the wrong size, the pty is not the culprit —
+  look downstream, at the app inside the pane.
+- **The herdr TUI in a Halo pane is the downstream case.** Its
+  welcome dialog rendered clipped at a 321px pane (drawing wider
+  than the pane) and reflowed correctly when the pane widened to
+  469px — so herdr does respond to resizes, but its initial render
+  can be at the wrong size (the pty size at spawn, while the layout
+  is still settling) and its redraw can leave stale content. And
+  opening the herdr TUI in a NARROW Halo pane killed the live
+  opencode agent: opencode segfaulted (its known tiny-size death)
+  and dropped off `herdr agent list` (3 live -> 2 live), with a
+  herdr crash-report artifact in the pane. herdr's TUI resizes its
+  workspace panes to fit its own terminal, so a narrow TUI pane
+  can shrink an agent's pane to a segfault size. That is a
+  herdr/opencode fragility, triggered through Halo — worth a
+  warning, and worth reproducing the nested agent view before
+  promising a Halo-side fix.
+- **0.6.2 follow-up: herdr DOES track the resize.** `herdr api
+  snapshot` shows the layout area moving with the Halo pane
+  (48 cols at a 534px pane, 38 cols at 285px) — the chain
+  Halo pty -> herdr TUI -> herdr server layout is intact. What
+  herdr does with that area is its own layout algorithm: in the
+  test rig's workspace (17 panes from repeated splits) the
+  opencode pane was assigned width 0, so it could not render at
+  all. No Halo-side fix follows from this — the opencode
+  rendering issue is herdr's internal pane layout and opencode's
+  redraw, both downstream of Halo. Do not over-split a herdr
+  workspace; if an agent looks cut off, resizing the pane or
+  re-attaching is the practical fix.
 - Agent messages in the chat are text actually read from the pane. If a
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —

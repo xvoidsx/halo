@@ -446,6 +446,30 @@ export default function App() {
   // divider moves share between its two neighbours (min 10% each).
   const [termSizes, setTermSizes] = useState<number[]>([1]);
   const dividerDragRef = useRef<{ index: number; startX: number; width: number; start: number[] } | null>(null);
+  // The sidebar resizes like herdr's desktop app: a drag handle on
+  // its right edge, 200–420px, remembered across restarts. The width
+  // is a UI preference, so it lives in localStorage — not in
+  // settings.json, which holds secrets (provider keys) instead.
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 420;
+  const SIDEBAR_DEFAULT = 280;
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      // Number(null) is 0, not NaN — a missing key must fall back
+      // to the default, not clamp to the 200px floor.
+      const raw = window.localStorage.getItem('halo.sidebarWidth');
+      const saved = raw === null ? Number.NaN : Number(raw);
+      return Number.isFinite(saved) ? Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, saved)) : SIDEBAR_DEFAULT;
+    } catch {
+      return SIDEBAR_DEFAULT;
+    }
+  });
+  const sidebarDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  // The drag's pointerup handler reads the width from this ref. It is
+  // updated synchronously on every move — an effect-synced ref lags
+  // behind a drag whose moves and pointerup fire in one burst, and
+  // the saved width would be the pre-drag value.
+  const sidebarWidthRef = useRef(sidebarWidth);
   // Pane ids currently holding a live `herdr agent attach` in any
   // terminal — the chat poller must not `agent read` those (a read
   // kills a live attach). TerminalPanels report their attach state.
@@ -509,6 +533,46 @@ export default function App() {
     setView('terminal');
   }, []);
 
+  // Which terminal pane the user is in — the split shortcuts and the
+  // context menu act on this one. A pane reports focus when its
+  // terminal gains it (the new pane focuses itself on spawn).
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>('pane-home');
+  const onPaneFocus = useCallback((paneId: string) => {
+    setFocusedPaneId(paneId);
+  }, []);
+
+  // Split AFTER a pane (the focused one, a given one, or the last):
+  // the new pane goes right beside it and takes half its share. The
+  // Split button and the shortcut split where you're looking; the
+  // context menu splits the pane you right-clicked. `addTermPane`
+  // above stays for "Open herdr" / "Jump to terminal", which append
+  // at the end instead.
+  const splitPane = useCallback(
+    (afterId?: string) => {
+      const id = `pane-${Date.now().toString(36)}`;
+      setTermPanes((panes) => {
+        const anchor = afterId ?? focusedPaneId ?? panes[panes.length - 1]?.id;
+        const idx = panes.findIndex((p) => p.id === anchor);
+        const at = idx === -1 ? panes.length : idx + 1;
+        const next = [...panes];
+        next.splice(at, 0, { id, title: 'shell', cwd: panes[0]?.cwd ?? '' });
+        return next;
+      });
+      setTermSizes((sizes) => {
+        const anchor = afterId ?? focusedPaneId ?? null;
+        const idx = termPanes.findIndex((p) => p.id === anchor);
+        const at = idx === -1 ? sizes.length - 1 : idx;
+        if (at < 0 || sizes.length === 0) return [1];
+        const share = sizes[at] ?? 1;
+        const next = [...sizes];
+        next.splice(at, 1, share / 2, share / 2);
+        return next;
+      });
+      setView('terminal');
+    },
+    [focusedPaneId, termPanes],
+  );
+
   const closeTermPane = useCallback((id: string) => {
     setTermPanes((panes) => {
       if (panes.length <= 1) return panes;
@@ -528,7 +592,98 @@ export default function App() {
       rest[giveTo] = (rest[giveTo] ?? 0) + closed;
       return rest;
     });
+    // Focus follows the pane that took the share, so the keyboard
+    // stays somewhere sensible after a close.
+    const idx = termPanes.findIndex((p) => p.id === id);
+    if (idx !== -1 && termPanes.length > 1) {
+      const neighbour = termPanes[Math.max(0, idx - 1)] ?? termPanes[idx + 1];
+      if (neighbour && neighbour.id !== id) setFocusedPaneId(neighbour.id);
+    }
   }, [termPanes]);
+
+  // Right-click menu on a terminal pane (Split right / Close pane).
+  // Positioned at the cursor; dismissed by clicking elsewhere,
+  // Escape, or picking an item.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; paneId: string } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (ctxMenuRef.current && !ctxMenuRef.current.contains(e.target as Node)) setCtxMenu(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [ctxMenu]);
+
+  // Pane shortcuts — Raven's Kitty vocabulary, not a new one:
+  // Ctrl+Shift+D splits, Ctrl+Shift+Q (or X) closes the pane,
+  // Ctrl+Shift+Arrow moves focus between panes. Kitty's exact
+  // scheme, settled 2026-10-08 (Ctrl+Shift+H is horizontal split
+  // there, and Ctrl+Shift+V stays paste — neither is used here).
+  // No leader key: a Ctrl+B leader would steal herdr's own prefix
+  // from any herdr TUI running in a pane.
+  //
+  // Capture phase, on purpose: the xterm's textarea handles keys
+  // before a bubble-phase window listener ever sees them, so a
+  // bubble listener would be too late — the key would already be in
+  // the shell. Capture runs first, and stopPropagation keeps the
+  // terminal from ever seeing a shortcut key. Keys we don't handle
+  // are left completely alone.
+  useEffect(() => {
+    const isEditableTarget = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return false;
+      if (t.tagName === 'INPUT' || t.tagName === 'SELECT') return true;
+      if (t.tagName === 'TEXTAREA' && !t.classList.contains('xterm-helper-textarea')) return true;
+      if (t.isContentEditable) return true;
+      return false;
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+      if (isEditableTarget(e)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'd') {
+        // Split the focused pane, from any tab — it switches to
+        // Terminal, like opening a new terminal from anywhere.
+        e.preventDefault();
+        e.stopPropagation();
+        splitPane();
+        return;
+      }
+      // Close and focus-move only make sense while looking at the
+      // terminal — closing a pane you can't see would be a surprise.
+      if (view !== 'terminal') return;
+      if (key === 'q' || key === 'x') {
+        const target = focusedPaneId ?? termPanes[termPanes.length - 1]?.id;
+        if (target && termPanes.length > 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeTermPane(target);
+        }
+        return;
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const idx = termPanes.findIndex((p) => p.id === focusedPaneId);
+        const cur = idx === -1 ? termPanes.length - 1 : idx;
+        const next = e.key === 'ArrowRight' ? Math.min(termPanes.length - 1, cur + 1) : Math.max(0, cur - 1);
+        const target = termPanes[next];
+        if (target && next !== cur) {
+          e.preventDefault();
+          e.stopPropagation();
+          setFocusedPaneId(target.id);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [view, termPanes, focusedPaneId, splitPane, closeTermPane]);
 
   // Dragging a divider moves share between its two neighbours. The
   // drag is measured against the sizes at drag start, so a fast drag
@@ -566,6 +721,32 @@ export default function App() {
   };
 
   const selected = useMemo(() => trails.find((t) => t.id === selectedId) ?? trails[0], [trails, selectedId]);
+
+  // Dragging the sidebar's right edge resizes it. The width is
+  // clamped live and saved when the drag ends, so it sticks.
+  const onSidebarPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    sidebarDragRef.current = { startX: e.clientX, startWidth: sidebarWidth };
+    const onMove = (ev: PointerEvent) => {
+      const drag = sidebarDragRef.current;
+      if (!drag) return;
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, drag.startWidth + (ev.clientX - drag.startX)));
+      sidebarWidthRef.current = next;
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      sidebarDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      try {
+        window.localStorage.setItem('halo.sidebarWidth', String(sidebarWidthRef.current));
+      } catch {
+        // Private mode or no storage — the width just doesn't stick.
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
   const activeAgent = useMemo(
     () => herdr?.agents.find((a) => a.paneId === settings.activeAgentPaneId) ?? herdr?.agents[0] ?? null,
     [herdr, settings.activeAgentPaneId],
@@ -582,7 +763,7 @@ export default function App() {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <aside className="sidebar" style={{ width: sidebarWidth, flex: `0 0 ${sidebarWidth}px` }}>
         <div className="brand">
           <h1>HALO</h1>
           <p className="tagline">herdr, trails, one live view</p>
@@ -633,6 +814,14 @@ export default function App() {
           </button>
         )}
       </aside>
+      <div
+        className="sidebar-divider"
+        role="separator"
+        aria-label="Resize sidebar"
+        aria-orientation="vertical"
+        title="Drag to resize the sidebar"
+        onPointerDown={onSidebarPointerDown}
+      />
 
       <main className="main">
         <div className="main-head">
@@ -678,13 +867,13 @@ export default function App() {
         {termMounted && (
           <div className={`terminal-view ${view === 'terminal' ? '' : 'hidden'}`}>
             <div className="terminal-toolbar">
-              <button className="icon-btn" onClick={() => addTermPane()}>
+              <button className="icon-btn" onClick={() => splitPane()} title="Split the focused pane (Ctrl+Shift+D)">
                 ＋ Split
               </button>
-              <button className="icon-btn" onClick={() => addTermPane('herdr')}>
+              <button className="icon-btn" onClick={() => addTermPane('herdr')} title="Boot the herdr TUI in a new pane">
                 ▤ Open herdr
               </button>
-              <span className="note">Panes stay alive when you switch tabs. “Open herdr” boots the herdr TUI in a pane.</span>
+              <span className="note">Panes stay alive when you switch tabs. “Open herdr” boots the herdr TUI in a pane. Shortcuts: Ctrl+Shift+D split · Ctrl+Shift+Q close pane · Ctrl+Shift+←/→ move between panes. Right-click a pane for more.</span>
             </div>
             <div className="terminal-panes">
               <Suspense
@@ -711,6 +900,12 @@ export default function App() {
                       onAttachState={onAttachState}
                       onExitState={onExitState}
                       reconnectSignal={reconnectAllSignal}
+                      focused={focusedPaneId === p.id}
+                      onFocus={onPaneFocus}
+                      onContextMenu={(e, paneId) => {
+                        e.preventDefault();
+                        setCtxMenu({ x: e.clientX, y: e.clientY, paneId });
+                      }}
                     />
                   </Fragment>
                 ))}
@@ -719,6 +914,37 @@ export default function App() {
           </div>
         )}
       </main>
+      {ctxMenu && (
+        <div
+          ref={ctxMenuRef}
+          className="ctx-menu"
+          style={{
+            left: Math.min(ctxMenu.x, window.innerWidth - 180),
+            top: Math.min(ctxMenu.y, window.innerHeight - 110),
+          }}
+          role="menu"
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              splitPane(ctxMenu.paneId);
+              setCtxMenu(null);
+            }}
+          >
+            Split right <span className="ctx-key">Ctrl+Shift+D</span>
+          </button>
+          <button
+            role="menuitem"
+            disabled={termPanes.length <= 1}
+            onClick={() => {
+              closeTermPane(ctxMenu.paneId);
+              setCtxMenu(null);
+            }}
+          >
+            Close pane <span className="ctx-key">Ctrl+Shift+Q</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
