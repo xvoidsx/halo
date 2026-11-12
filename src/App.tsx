@@ -181,7 +181,7 @@ function AgentSwitcher({
 
 /** Trails home when nothing has run yet: a trail-like orbit, no
  * test-repo names, no favoured harness — just the invitation. */
-function TrailsEmpty({ onOpenTerminal }: { onOpenTerminal: () => void }) {
+function TrailsEmpty({ onOpenTerminal, detail }: { onOpenTerminal: () => void; detail?: string }) {
   return (
     <div className="main-body trails-empty">
       <div className="trail-orbit" aria-hidden="true">
@@ -195,6 +195,7 @@ function TrailsEmpty({ onOpenTerminal }: { onOpenTerminal: () => void }) {
         No trail has run yet. Open the terminal and run a trail with the Entire CLI — in any repo, with any agent
         herdr recognizes — and Halo picks it up live, right here.
       </p>
+      {detail && <p className="note warn">{detail}</p>}
       <button className="primary-btn" onClick={onOpenTerminal}>
         Open terminal
       </button>
@@ -208,9 +209,20 @@ function TrailView({ trail }: { trail: Trail }) {
   return (
     <div className="main-body">
       <p className="meta">
-        {trail.repo} · {trail.branch} · agent: {trail.agent}
+        {[trail.repo, trail.branch, trail.agent ? `agent: ${trail.agent}` : '', trail.phase]
+          .filter(Boolean)
+          .join(' · ')}
       </p>
+      {trail.url && (
+        <p className="note">
+          <a href={trail.url} target="_blank" rel="noreferrer">
+            Open in Entire ↗
+          </a>
+        </p>
+      )}
 
+      {trail.scores === null && <p className="note">No evals yet — review agents have not scored this trail.</p>}
+      {trail.scores !== null && (
       <div className="scores">
         <div className="score">
           <div className="s-label">Security</div>
@@ -235,6 +247,7 @@ function TrailView({ trail }: { trail: Trail }) {
           </div>
         </div>
       </div>
+      )}
 
       <div className="section">
         <h3>Findings ({openFindings.length} open)</h3>
@@ -257,6 +270,7 @@ function TrailView({ trail }: { trail: Trail }) {
 
       <div className="section">
         <h3>Sessions &amp; checkpoints</h3>
+        {trail.sessions.length === 0 && <p className="note">No sessions yet.</p>}
         {trail.sessions.map((c) => (
           <div key={c.id} className="checkpoint">
             <span className="c-time">{c.at}</span>
@@ -270,6 +284,7 @@ function TrailView({ trail }: { trail: Trail }) {
 
       <div className="section">
         <h3>Gates &amp; approvals</h3>
+        {trail.gates.length === 0 && <p className="note">No gates yet.</p>}
         <div className="gates">
           {trail.gates.map((g) => (
             <div key={g.name} className={`gate ${g.status}`}>
@@ -285,6 +300,8 @@ function TrailView({ trail }: { trail: Trail }) {
 
       <div className="section">
         <h3>Last five runs</h3>
+        {trail.runs.length === 0 && <p className="note">No runs yet.</p>}
+        {trail.runs.length > 0 && (
         <table className="runs">
           <thead>
             <tr>
@@ -307,6 +324,7 @@ function TrailView({ trail }: { trail: Trail }) {
             ))}
           </tbody>
         </table>
+        )}
       </div>
     </div>
   );
@@ -412,6 +430,22 @@ function SettingsView({
       <button className="icon-btn" onClick={onRefreshHerdr}>
         ↻ Refresh agents
       </button>
+
+      <h3>Entire Trails</h3>
+      <label>
+        Project
+        <input
+          type="text"
+          value={settings.entire.project}
+          onChange={(e) => setSettings({ ...settings, entire: { ...settings.entire, project: e.target.value } })}
+          placeholder="e.g. et/trails-test or gh/xvoidsx"
+        />
+      </label>
+      <p className="note">
+        The Trails list comes from `entire trail list --project`, which needs a project — `et/&lt;project&gt;` for a
+        native Entire repo, `gh/&lt;owner&gt;` for a GitHub mirror. The Entire CLI must be installed and logged in.
+        Until a project is set, the Trails list stays empty.
+      </p>
 
       <h3>Ollama — local-first</h3>
       <label>
@@ -519,6 +553,14 @@ export default function App() {
   const [view, setView] = useState<View>('trail');
   const [trails, setTrails] = useState<Trail[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
+  // Human-readable trail-list state (empty because no project is
+  // configured, the CLI is missing, …) — shown in the sidebar and
+  // the empty view instead of a bare "No trails yet."
+  const [trailsDetail, setTrailsDetail] = useState('');
+  // Fuller trails fetched via `entire trail show`, keyed by id. The
+  // list carries intent only; the detail survives list refreshes
+  // because it lives here, not in the list rows.
+  const [trailDetails, setTrailDetails] = useState<Record<string, Trail>>({});
   const [settings, setSettings] = useState<HaloSettings>(defaultSettings);
   const [herdr, setHerdr] = useState<HerdrState | null>(null);
   // Terminal panes are first-class: one shell by default, at home —
@@ -594,26 +636,69 @@ export default function App() {
     if (window.halo) void window.halo.herdrStatus().then(setHerdr);
   }, []);
 
+  // Trails come from the Entire CLI (main reads the configured project
+  // from settings). Refresh on mount, every 30 s, and whenever the
+  // Trails view is opened — a trail started after launch still shows
+  // up live. 30 s, not the herdr poll's 10 s: the list call hits the
+  // Entire API over the network.
+  const refreshTrails = useCallback(() => {
+    if (!window.halo) return;
+    void window.halo.listTrails().then((res) => {
+      setTrails(res.trails);
+      setTrailsDetail(res.detail);
+      setSelectedId((prev) => {
+        if (prev && res.trails.some((t) => t.id === prev)) return prev;
+        return res.trails[0]?.id ?? '';
+      });
+    });
+  }, []);
+
+  // Picking a trail switches to the Trails view; the detail effect
+  // below fetches its full view via `entire trail show`.
+  const selectTrail = useCallback((id: string) => {
+    setSelectedId(id);
+    setView('trail');
+  }, []);
+
   useEffect(() => {
     // No trail data is faked anywhere: the list starts empty and only
     // fills when a real trail source is wired up. In a plain browser
     // (vite dev) there is no Electron bridge, so the shell previews empty.
     if (!window.halo) {
       setTrails([]);
+      setTrailsDetail('No Electron bridge (browser preview).');
       setHerdr({ installed: false, detail: 'No Electron bridge (browser preview).', agents: [] });
       return;
     }
-    void window.halo.listTrails().then((res) => {
-      setTrails(res.trails);
-      if (res.trails[0]) setSelectedId(res.trails[0].id);
-    });
+    refreshTrails();
     void window.halo.getSettings().then(setSettings);
     refreshHerdr();
     // Live detection: herdr agents come and go — re-check while Halo is
     // open, so an agent started after launch still shows up.
     const timer = window.setInterval(refreshHerdr, 10000);
-    return () => window.clearInterval(timer);
-  }, [refreshHerdr]);
+    const trailTimer = window.setInterval(refreshTrails, 30000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(trailTimer);
+    };
+  }, [refreshHerdr, refreshTrails]);
+
+  // The list carries intent only; the detail view comes from
+  // `entire trail show`, fetched when a trail is picked (or on first
+  // load). It lands in trailDetails, so the 30 s list refresh never
+  // clobbers a fuller trail with its thin list row.
+  useEffect(() => {
+    if (!selectedId || !window.halo) return;
+    let cancelled = false;
+    void window.halo.getTrail(selectedId).then((res) => {
+      if (cancelled || !res.trail) return;
+      const full = res.trail;
+      setTrailDetails((prev) => ({ ...prev, [full.id]: full }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
 
   useEffect(() => {
     if (view === 'terminal') setTermMounted(true);
@@ -830,7 +915,11 @@ export default function App() {
     window.addEventListener('pointerup', onUp);
   };
 
-  const selected = useMemo(() => trails.find((t) => t.id === selectedId) ?? trails[0], [trails, selectedId]);
+  const selected = useMemo(
+    () =>
+      (selectedId ? (trailDetails[selectedId] ?? trails.find((t) => t.id === selectedId)) : undefined) ?? trails[0],
+    [trails, trailDetails, selectedId],
+  );
 
   // Dragging the sidebar's right edge resizes it. The width is
   // clamped live and saved when the drag ends, so it sticks.
@@ -889,22 +978,19 @@ export default function App() {
         />
         <div className="trail-list">
           <h2>Trails</h2>
-          {trails.length === 0 && <p className="note">No trails yet.</p>}
+          {trails.length === 0 && <p className="note">{trailsDetail || 'No trails yet.'}</p>}
           {trails.map((t) => (
             <button
               key={t.id}
               className={`trail-row ${selected?.id === t.id && view === 'trail' ? 'active' : ''}`}
-              onClick={() => {
-                setSelectedId(t.id);
-                setView('trail');
-              }}
+              onClick={() => selectTrail(t.id)}
             >
               <div className="t-title">
                 {t.title}
                 <span className={`pill ${STATUS_PILL[t.status] ?? 'cyan'}`}>{t.status}</span>
               </div>
               <div className="t-meta">
-                {t.repo} · {t.agent}
+                {[t.repo, t.agent, t.phase].filter(Boolean).join(' · ')}
               </div>
             </button>
           ))}
@@ -938,7 +1024,10 @@ export default function App() {
           <h2>{headTitle}</h2>
           <button
             className={`icon-btn ${view === 'trail' ? 'active' : ''}`}
-            onClick={() => setView('trail')}
+            onClick={() => {
+              setView('trail');
+              refreshTrails();
+            }}
           >
             Trails
           </button>
@@ -959,7 +1048,7 @@ export default function App() {
           </button>
         </div>
         {view === 'trail' && selected && <TrailView trail={selected} />}
-        {view === 'trail' && !selected && <TrailsEmpty onOpenTerminal={() => setView('terminal')} />}
+        {view === 'trail' && !selected && <TrailsEmpty onOpenTerminal={() => setView('terminal')} detail={trailsDetail} />}
         {chatMounted && (
           <div className={`chat-view ${view === 'chat' ? '' : 'hidden'}`}>
             <ChatView

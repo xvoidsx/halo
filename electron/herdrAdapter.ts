@@ -29,14 +29,30 @@
 // - A CLI newer than the server fails with protocol_mismatch; the
 //   error surfaces in `detail` instead of pretending all is well.
 //
-// TODO (once the first real trail exists):
-// - listTrails(): source from the Entire CLI (`entire trail list` / show)
-//   or from herdr once a trails surface is agreed. Currently no trail
-//   data is served at all — the list is empty until then.
-// - runTrail() / watchTrail(): stream trail events into the renderer.
+// Trails come from the Entire CLI (docs.entire.com/cli-reference/trail),
+// not from herdr: `entire trail list --project <project> --json` for the
+// sidebar, `entire trail show <selector> --project <project> --json` for
+// the detail view. --project is required even inside a clone, and the
+// project is `et/<project>` for a native Entire repo or `gh/<owner>` for
+// a GitHub mirror. The mapping below is docs-grounded and defensive —
+// field names get tightened against a real `--json` paste (Raven's
+// trails-test run, 2026-11-12).
+// - watchTrail(): stream live trail events into the renderer via
+//   `entire trail watch --json` — not built yet.
 
 import { execFile } from 'node:child_process';
-import type { AgentReadResult, AgentSendResult, HerdrAgent, HerdrState } from '../src/types.js';
+import type {
+  AgentReadResult,
+  AgentSendResult,
+  Finding,
+  Gate,
+  HerdrAgent,
+  HerdrState,
+  Trail,
+  TrailDetailResult,
+  TrailListResult,
+  TrailStatus,
+} from '../src/types.js';
 
 const TIMEOUT_MS = 5000;
 
@@ -201,26 +217,219 @@ export async function listHerdrAgents(): Promise<HerdrState> {
   return detectHerdr();
 }
 
-// --- Stubs: real trails data does not exist yet. ---------------------------
+// --- Entire Trails: live trail data from the Entire CLI. ------------------
+//
+// Nothing is ever invented here: an unrecognized JSON shape returns an
+// empty list with a detail that says so, and a trail with no evals yet
+// gets scores: null, which the UI renders as "No evals yet" instead of
+// fake numbers. The list carries intent (title, status); eval scores,
+// findings and runs arrive only when their own CLI surfaces are wired.
 
 export interface NotImplemented {
   status: 'not-implemented';
   todo: string;
 }
 
-/** TODO: source from the Entire CLI once the first test trail exists. */
-export async function listTrails(): Promise<NotImplemented> {
+/** `entire trail list` hits the Entire API over the network — give it
+ * longer than the local herdr calls. */
+const ENTIRE_TIMEOUT_MS = 15000;
+
+function runEntire(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile('entire', args, { timeout: ENTIRE_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        resolve({ code: -1, stdout: '', stderr: 'entire not found on PATH' });
+        return;
+      }
+      resolve({
+        code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+        stdout: String(stdout ?? ''),
+        stderr: String(stderr ?? ''),
+      });
+    });
+  });
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function asString(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+/** The list JSON is a bare array or an object holding one under a
+ * `trails` / `items` / `data` key. Anything else is unrecognized. */
+function trailArray(json: unknown): unknown[] | null {
+  if (Array.isArray(json)) return json;
+  const rec = asRecord(json);
+  if (!rec) return null;
+  for (const key of ['trails', 'items', 'data']) {
+    if (Array.isArray(rec[key])) return rec[key] as unknown[];
+  }
+  return null;
+}
+
+/** Entire lifecycle is open/closed; Halo's TrailStatus also carries
+ * the eval states a trail can be in once review agents score it. */
+function mapTrailStatus(raw: unknown): TrailStatus {
+  const s = asString(raw).toLowerCase();
+  if (s === 'closed' || s === 'merged') return 'merged';
+  if (s === 'review') return 'review';
+  if (s === 'green') return 'green';
+  if (s === 'blocked') return 'blocked';
+  return 'running'; // 'open' and anything unrecognized: the trail is live
+}
+
+function mapTrailEntry(entry: unknown): Trail | null {
+  const rec = asRecord(entry);
+  if (!rec) return null;
+  const num = rec.number ?? rec.id;
+  const id =
+    asString(rec.id) ||
+    asString(rec.ulid) ||
+    (num !== undefined && num !== null ? `trail-${String(num)}` : '');
+  if (!id) return null;
   return {
-    status: 'not-implemented',
-    todo: 'listTrails(): no live trail source yet — wire to `entire trail list` (or herdr) after the first trail run. Nothing is served until then.',
+    id,
+    title: asString(rec.title) || asString(rec.name) || '(untitled trail)',
+    repo: asString(rec.repo ?? rec.repository),
+    branch: asString(rec.branch),
+    status: mapTrailStatus(rec.status),
+    agent: asString(rec.agent),
+    // The list carries a workflow phase ("planning", …); the detail
+    // may refine it. Absent on shapes that don't carry one.
+    phase: asString(rec.phase) || undefined,
+    // The show object carries the trail's entire.com URL; the list
+    // entries don't. Absent on shapes that don't carry one.
+    url: asString(rec.url) || undefined,
+    // The list carries intent, not eval scores.
+    scores: null,
+    findings: [],
+    sessions: [],
+    gates: [],
+    runs: [],
   };
 }
 
-/** TODO: stream live trail events into the renderer. */
+function mapFindings(v: unknown): Finding[] {
+  if (!Array.isArray(v)) return [];
+  const out: Finding[] = [];
+  for (const item of v) {
+    const r = asRecord(item);
+    if (!r) continue;
+    const sev = asString(r.severity).toLowerCase();
+    const st = asString(r.status).toLowerCase();
+    out.push({
+      id: asString(r.id) || `finding-${out.length}`,
+      severity: sev === 'critical' || sev === 'high' || sev === 'medium' || sev === 'low' ? sev : 'info',
+      status: st === 'addressing' || st === 'fixed' || st === 'dismissed' ? st : 'open',
+      file: asString(r.file) || undefined,
+      message: asString(r.message ?? r.title ?? r.summary),
+      suggestedFix: asString(r.suggestedFix ?? r.fix ?? r.suggestion),
+    });
+  }
+  return out;
+}
+
+function mapGates(v: unknown): Gate[] {
+  if (!Array.isArray(v)) return [];
+  const out: Gate[] = [];
+  for (const item of v) {
+    const r = asRecord(item);
+    if (!r) continue;
+    const st = asString(r.status).toLowerCase();
+    out.push({
+      name: asString(r.name) || `gate-${out.length}`,
+      status: st === 'approved' || st === 'blocked' ? st : 'pending',
+      by: asString(r.by ?? r.approver) || undefined,
+    });
+  }
+  return out;
+}
+
+/** `show` returns the trail intent plus `changes[]` — one entry per
+ * repository branch, each with its own URL. It may wrap the trail
+ * under a `trail` key. */
+function mapTrailDetail(json: unknown, fallbackId: string): Trail | null {
+  const rec = asRecord(json);
+  if (!rec) return null;
+  const t = asRecord(rec.trail) ?? rec;
+  const base = mapTrailEntry(t);
+  if (!base) return null;
+  const changes = Array.isArray(t.changes) ? t.changes : [];
+  const first = asRecord(changes[0]);
+  return {
+    ...base,
+    id: base.id || fallbackId,
+    repo: (first ? asString(first.repo ?? first.repository ?? first.name) : '') || base.repo,
+    branch: (first ? asString(first.branch) : '') || base.branch,
+    findings: mapFindings(t.findings),
+    gates: mapGates(t.gates),
+  };
+}
+
+/** The Trails sidebar, from `entire trail list --project <project>
+/// --json`. The project comes from Settings → Entire Trails. */
+export async function listTrails(project: string): Promise<TrailListResult> {
+  if (!project) {
+    return { trails: [], detail: 'No Entire project configured — set it in Settings → Entire Trails.' };
+  }
+  const { code, stdout, stderr } = await runEntire(['trail', 'list', '--project', project, '--json']);
+  if (code === -1) {
+    return { trails: [], detail: 'entire CLI not found on PATH — install it and run `entire login`.' };
+  }
+  if (code !== 0) {
+    const err = stderr.trim() || stdout.trim();
+    return { trails: [], detail: `entire trail list failed: ${err.slice(0, 200)}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return { trails: [], detail: 'entire trail list returned output that is not JSON.' };
+  }
+  const arr = trailArray(parsed);
+  if (arr === null) {
+    return { trails: [], detail: 'Unrecognized `entire trail list --json` shape — nothing listed.' };
+  }
+  const trails = arr.map(mapTrailEntry).filter((t): t is Trail => t !== null);
+  return { trails, detail: trails.length === 0 ? 'No trails in this project yet.' : '' };
+}
+
+/** The detail view, from `entire trail show <id> --project <project>
+/// --json`. */
+export async function getTrail(id: string, project: string): Promise<TrailDetailResult> {
+  if (!project) {
+    return { trail: null, detail: 'No Entire project configured — set it in Settings → Entire Trails.' };
+  }
+  if (!id) return { trail: null, detail: 'No trail selected.' };
+  const { code, stdout, stderr } = await runEntire(['trail', 'show', id, '--project', project, '--json']);
+  if (code === -1) {
+    return { trail: null, detail: 'entire CLI not found on PATH — install it and run `entire login`.' };
+  }
+  if (code !== 0) {
+    const err = stderr.trim() || stdout.trim();
+    return { trail: null, detail: `entire trail show failed: ${err.slice(0, 200)}` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return { trail: null, detail: 'entire trail show returned output that is not JSON.' };
+  }
+  const trail = mapTrailDetail(parsed, id);
+  if (!trail) return { trail: null, detail: 'Unrecognized `entire trail show --json` shape.' };
+  return { trail, detail: '' };
+}
+
+/** TODO: stream live trail events into the renderer via
+ * `entire trail watch --json` (one JSON line per event, auto-reconnect).
+ * The list + detail above are the first pass; watch is the live tail. */
 export async function watchTrail(_trailId: string): Promise<NotImplemented> {
   return {
     status: 'not-implemented',
-    todo: 'watchTrail(): live trail event streaming is not built yet. The trail list stays empty until the Entire CLI surface is agreed.',
+    todo: 'watchTrail(): live trail event streaming is not built yet — `entire trail watch --json` is the source when it lands.',
   };
 }
 

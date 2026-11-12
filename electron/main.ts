@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, settingsPath } from './settingsFile.js';
-import { detectHerdr, listTrails, readAgentOutput, sendAgentMessage, watchTrail } from './herdrAdapter.js';
+import { detectHerdr, getTrail, listTrails, readAgentOutput, sendAgentMessage, watchTrail } from './herdrAdapter.js';
 import { TerminalManager } from './terminal.js';
 import type { HaloSettings } from '../src/types.js';
 
@@ -94,15 +94,15 @@ app.whenReady().then(() => {
     return { ok: true, path: settingsPath() };
   });
 
-  // Trails: no live source is wired up yet, so the list is empty — no
-  // placeholder data is ever served. Wire listTrails() to the Entire
-  // CLI once the first test trail exists (see herdrAdapter.ts).
-  ipcMain.handle('halo:listTrails', () => ({ trails: [] }));
-  ipcMain.handle('halo:getTrail', (_e, _id: string) => ({ trail: null }));
+  // Trails: live from the Entire CLI (see herdrAdapter.ts). The project
+  // comes from Settings → Entire Trails; without it the list is empty
+  // with a detail that says why — never placeholder data.
+  ipcMain.handle('halo:listTrails', () => listTrails(loadSettings().entire.project.trim()));
+  ipcMain.handle('halo:getTrail', (_e, id: string) => getTrail(id, loadSettings().entire.project.trim()));
 
-  // Herdr: real detection via the herdr CLI; everything else is a stub.
+  // Herdr: real detection via the herdr CLI; trail watching is a stub
+  // until `entire trail watch --json` streaming lands.
   ipcMain.handle('halo:herdrStatus', () => detectHerdr());
-  ipcMain.handle('halo:listTrailsLive', () => listTrails());
   ipcMain.handle('halo:watchTrail', (_e, id: string) => watchTrail(id));
 
   // Agent chat: send + read by pane_id. Errors surface honestly — the

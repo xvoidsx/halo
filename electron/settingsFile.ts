@@ -24,6 +24,7 @@ export function loadSettings(): HaloSettings {
       ...defaultSettings,
       ...parsed,
       ollama: { ...defaultSettings.ollama, ...(parsed.ollama ?? {}) },
+      entire: { ...defaultSettings.entire, ...(parsed.entire ?? {}) },
       terminal: { ...defaultSettings.terminal, ...(parsed.terminal ?? {}) },
       byok: {
         openai: { ...defaultSettings.byok.openai, ...(parsed.byok?.openai ?? {}) },

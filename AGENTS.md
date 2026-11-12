@@ -386,6 +386,92 @@ what to build, where things live, and the lessons that apply here.
   always exited cleanly (exit 0, port freed); the test was watching
   a corpse.
 
+## Trails — live data from the Entire CLI (0.7.0, 2026-11-12)
+
+- **Trails are real now, not stubs.** `halo:listTrails` / `halo:getTrail`
+  shell out to the Entire CLI: `entire trail list --project <project>
+  --json` for the sidebar, `entire trail show <id> --project <project>
+  --json` for the detail. `watchTrail()` is still a stub —
+  `entire trail watch --json` is the source when live streaming lands.
+- **The project is a Settings field, not derived.** `HaloSettings.entire
+  .project` (e.g. `et/xvoidsx`, `gh/xvoidsx`), edited in Settings →
+  Entire Trails. `entire trail list` requires `--project`, so an empty
+  project means an empty list with an honest detail ("No Entire project
+  configured — set it in Settings → Entire Trails."), never a bare
+  "No trails yet." Deriving the project from repo remotes was
+  considered and rejected as too fragile.
+- **The CLI boundary is defensive because the JSON shape is
+  provisional.** `runEntire` (electron/herdrAdapter.ts, 15 s timeout —
+  network calls get longer than herdr's 5 s) returns code -1 with
+  "entire not found on PATH" on ENOENT. `trailArray` accepts a bare
+  array or an object with `trails`/`items`/`data`; anything else is
+  "Unrecognized `entire trail list --json` shape — nothing listed."
+  Field names (`id`/`ulid`/`number`, `repo`/`repository`, findings'
+  `suggestedFix`/`fix`/`suggestion`) are docs-grounded guesses —
+  tighten them against Raven's real `--json` output before calling
+  this done; his exact output becomes the test fixture.
+- **No evals yet is a state, not a zero.** `Trail.scores` is
+  `EvalScores | null`; a trail with no review-agent scores renders
+  "No evals yet" instead of invented numbers. Findings/gates map
+  through severity/status whitelists (anything unrecognized falls
+  back to `info`/`open`/`pending`), never fabricated.
+- **Refresh shape.** List refreshes on mount, every 30 s (network
+  API — deliberately slower than the 10 s herdr poll), and whenever
+  the Trails nav button is clicked. Selecting a trail fetches its
+  detail once into `trailDetails` (keyed by id), so the 30 s list
+  refresh never clobbers a fuller trail with its thin list row.
+  The current selection survives a refresh when its id is still
+  listed, else the first trail is auto-selected.
+- **Verification: fake `entire` + CDP test.**
+  `~/workspace/.tmp/fakebin/entire` serves Raven's REAL `trail
+  list` + `trail show --json` output (2026-11-12) for `trail list` /
+  `trail show`; `scripts/trails-test.mjs` (5 checks:
+  not-configured note, trail appears live, detail renders the real
+  trail honestly — phase, "No evals yet", empty states for
+  findings/gates/runs/sessions — Entire link, Settings field holds
+  the project) passes dev against it. The test seeds the settings
+  file itself (main reads it fresh on every list call, so no restart
+  is needed between phases) — and leaves `entire.project` set to
+  `et/trails-test`, so run the UI smoke test with the project
+  cleared first: it checks the empty Trails view and fails while a
+  fixture trail is listed (seen 2026-11-12).
+- **Main-process changes need an app restart — Page.reload only
+  refreshes the renderer.** A stale main silently serves old mapping
+  code: after the `phase`/`url` adapter edits, the trails detail
+  test failed on "planning" + the Entire link until the dev app was
+  closed and relaunched (the renderer had the new empty-state notes,
+  the main still returned trails without phase/url). Restart the dev
+  app after any `electron/` change, then re-run the tests.
+- **Packaged tests run AS halotest, not root.**
+  `su halotest -c 'env -i HOME=/home/halotest
+  PATH=/home/halotest/.local/bin:/home/halotest/fakebin:/usr/bin:/bin
+  xvfb-run … /usr/bin/halo --no-sandbox --remote-debugging-port=9222'`;
+  the CDP tests run as halotest too (`su halotest -c 'PATH=/usr/bin:/bin
+  node …/scripts/<test>.mjs 9222'`) so the trails test's
+  `os.homedir()` lands on halotest's settings file. Setup: the fake
+  `entire` is copied to `/home/halotest/fakebin/entire`, and the repo
+  tree is root-owned 660 — `chmod o+x` on `halo/` + `scripts/` and
+  `a+r` on `scripts/*.mjs` so halotest can read the test scripts.
+  The packaged trails test needs the fake on halotest's PATH the same
+  way the dev test needs it on the dev app's PATH. (0.7.0 packaged
+  suite: ui-smoke, settings, trails, close — all green as halotest.)
+- **Rig spec correction (2026-11-12).** The intended herdr rig is
+  THREE agents — fakepi on w1:p1, fakepi2, opencode-test — because
+  chat-list-test requires a fakepi2 agent (it asserts row 2 and sends
+  to it). A VM replacement had wiped `/tmp/setup-rig.sh` and left
+  the restored w1 (17 panes) as dead stubs; the rebuild stops the
+  server, removes the stale session state (`~/.config/herdr/
+  session.json`, `sessions/`, `session-snapshots/`), and restarts
+  with the fake binaries on PATH. Full dev suite green on the
+  rebuilt rig (chat-layout 8/8, keepalive 14/14, splits 10/10,
+  herdr-e2e pass, settings/sidebar/trails/parser/pty/close pass).
+- **chat-list has a timing flake, not a regression.** On the correct
+  rig it failed 1 in 3 runs on `attachRenders` alone (everything
+  else green, the send provably landed in the pane's scrollback) and
+  passed on immediate re-run — the known 0.6.1 attach-start race is
+  the candidate, unproven at the micro level. No code change; if it
+  recurs, lengthen the test's poll/retry, not the app.
+
 ## Terminal (xterm.js + node-pty)
 
 - Stack, borrowed from copland on purpose: node-pty shells in main

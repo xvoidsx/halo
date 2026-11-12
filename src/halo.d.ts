@@ -5,7 +5,8 @@ import type {
   HerdrState,
   TermOpResult,
   TermSpawnResult,
-  Trail,
+  TrailDetailResult,
+  TrailListResult,
 } from './types';
 
 declare global {
@@ -14,10 +15,9 @@ declare global {
       getVersion: () => Promise<string>;
       getSettings: () => Promise<HaloSettings>;
       saveSettings: (next: HaloSettings) => Promise<{ ok: true; path: string }>;
-      listTrails: () => Promise<{ trails: Trail[] }>;
-      getTrail: (id: string) => Promise<{ trail: Trail | null }>;
+      listTrails: () => Promise<TrailListResult>;
+      getTrail: (id: string) => Promise<TrailDetailResult>;
       herdrStatus: () => Promise<HerdrState>;
-      listTrailsLive: () => Promise<{ status: string; todo: string }>;
       watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
       agentSend: (paneId: string, text: string) => Promise<AgentSendResult>;
       agentRead: (paneId: string, lines?: number) => Promise<AgentReadResult>;

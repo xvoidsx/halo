@@ -60,12 +60,33 @@ export interface Trail {
   branch: string;
   status: TrailStatus;
   agent: string;
-  scores: EvalScores;
+  /** Workflow phase from the Entire API (e.g. "planning") — the
+   * list carries it; absent on shapes that don't. */
+  phase?: string;
+  /** Link to the trail on entire.com, when the API returns one
+   * (the show object carries `url`). */
+  url?: string;
+  /** Null when no eval has scored the trail yet — the UI says so
+   * instead of showing invented numbers. */
+  scores: EvalScores | null;
   findings: Finding[];
   sessions: Checkpoint[];
   gates: Gate[];
   /** Most recent first, max five. */
   runs: TrailRun[];
+}
+
+/** Result of `entire trail list --json`: the trails plus an honest
+ * human-readable note for when the list is empty or failed. */
+export interface TrailListResult {
+  trails: Trail[];
+  detail: string;
+}
+
+/** Result of `entire trail show --json` for one trail. */
+export interface TrailDetailResult {
+  trail: Trail | null;
+  detail: string;
 }
 
 export type AgentStatus = 'running' | 'idle' | 'not-detected' | 'error';
@@ -136,11 +157,19 @@ export interface TerminalConfig {
   fontSize: number;
 }
 
+export interface EntireConfig {
+  /** Entire project for the Trails list, e.g. 'et/trails-test' or
+   * 'gh/xvoidsx'. `entire trail list` requires --project, so the
+   * list stays empty until this is set. Empty = not configured. */
+  project: string;
+}
+
 export interface HaloSettings {
   repos: RepoEntry[];
   activeRepoId: string | null;
   activeAgentPaneId: string | null;
   ollama: OllamaConfig;
+  entire: EntireConfig;
   terminal: TerminalConfig;
   byok: {
     openai: ProviderConfig;
@@ -162,6 +191,7 @@ export const defaultSettings: HaloSettings = {
   activeRepoId: null,
   activeAgentPaneId: null,
   ollama: { baseUrl: 'http://127.0.0.1:11434', defaultModel: 'qwen3:8b' },
+  entire: { project: '' },
   terminal: { fontSize: 13 },
   byok: {
     openai: { apiKey: '', enabled: false },
