@@ -238,6 +238,17 @@ no fake replies, ever.
   installed kinds (opencode, pi, codex in the sandbox; omp/hermes
   named as not installed), spawning pi creates a live `pi-1` agent
   and jumps to its chat, and the pane is closed again afterwards.
+- Sidebar + hints (0.12.0, 2026-11-12): the forge switcher never
+  scrolls sideways at 270/280px — `min-width: 0` + an ellipsis
+  backstop on the labels, tightened chrome (3px gaps, 2px padding,
+  16px marks, flex-basis auto so the longest label gets its share);
+  every label reads in full at the default width, and the Terminal
+  hint bar wraps with pink kbd chips instead of clipping
+  mid-shortcut. Opencode clip, diagnosed: a direct attach renders
+  fully at 68 cols; the nested herdr TUI squeezes opencode's
+  sub-pane (clipped UI at full width, segfault at split width) —
+  herdr-side, and the mitigations (per-pane zoom, pane maximize)
+  are the next version's QoL round.
 - No placeholder data anywhere. An empty trail list means no trail has run
   yet — the app never shows a trail that didn't happen.
 - No telemetry anywhere. Local-first by construction.

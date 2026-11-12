@@ -18,6 +18,11 @@
 //  4. At 200px the forge buttons go icons-only (labels hidden) and
 //     the dots stay visible; long trail titles ellipsize.
 //  5. The Notes button is present in the sidebar and the main head.
+//  6. At 270px (labels visible, tightest fit) every forge button
+//     stays inside the sidebar and the switcher never scrolls
+//     sideways; same no-scroll check at the 280px default.
+//  7. The Terminal hint bar wraps (no mid-shortcut clip) and
+//     shows its three kbd shortcut chips.
 //
 // Usage: node scripts/connections-test.mjs [port]
 import * as fs from 'node:fs';
@@ -189,6 +194,67 @@ const titleFits = await evalJs(
   })()`,
 );
 check('long trail titles stay inside the narrow sidebar', titleFits === true, `got ${titleFits}`);
+
+// --- 6. Forge switcher never scrolls sideways (0.12.0) ---
+// At 270px the labels are still visible (narrow starts under 260)
+// and the fit is at its tightest: the buttons must stay inside the
+// sidebar and the switcher must not scroll — the 0.11.0 bug was a
+// horizontal scrollbar at the default width, from the buttons
+// refusing to shrink below their content width.
+const switcherFits = async (width) => {
+  await evalJs(`localStorage.setItem('halo.sidebarWidth', '${width}')`);
+  await send('Page.reload', { ignoreCache: true });
+  await sleep(4000);
+  return evalJs(
+    `(() => {
+      const side = document.querySelector('.sidebar')?.getBoundingClientRect();
+      const sw = document.querySelector('.forge-switch');
+      const btns = [...document.querySelectorAll('.forge-btn')];
+      if (!side || !sw || btns.length !== 3) return null;
+      return {
+        switcherScrolls: sw.scrollWidth > sw.clientWidth,
+        buttonsInside: btns.every((b) => b.getBoundingClientRect().right <= side.right + 1),
+        labelsWhole: [...document.querySelectorAll('.forge-btn .f-label')].every(
+          (l) => l.scrollWidth <= l.clientWidth,
+        ),
+      };
+    })()`,
+  );
+};
+const at270 = await switcherFits(270);
+check(
+  'at 270px the forge buttons stay inside the sidebar and the switcher never scrolls',
+  at270?.buttonsInside === true && at270?.switcherScrolls === false,
+  `got ${JSON.stringify(at270)}`,
+);
+const at280 = await switcherFits(280);
+check(
+  'at the 280px default the forge switcher never scrolls sideways and every label reads in full',
+  at280?.switcherScrolls === false && at280?.labelsWhole === true,
+  `got ${JSON.stringify(at280)}`,
+);
+
+// --- 7. The Terminal hint bar wraps with kbd chips (0.12.0) ---
+await evalJs(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Terminal'))?.click()`);
+await sleep(2000);
+const hint = await evalJs(
+  `(() => {
+    const el = document.querySelector('.terminal-toolbar .note');
+    if (!el) return null;
+    const kbd = [...el.querySelectorAll('kbd')].map((k) => k.textContent);
+    const r = el.getBoundingClientRect();
+    return { kbds: kbd, height: Math.round(r.height), scrolls: el.scrollWidth > el.clientWidth };
+  })()`,
+);
+check(
+  'terminal hint wraps instead of clipping and shows its shortcut chips',
+  Array.isArray(hint?.kbds) &&
+    hint.kbds.length === 3 &&
+    hint.kbds[0].includes('Ctrl+Shift+D') &&
+    hint.scrolls === false &&
+    hint.height > 20,
+  `got ${JSON.stringify(hint)}`,
+);
 
 // --- 5. The Notes button is present ---
 const notesBtn = await evalJs(

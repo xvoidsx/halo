@@ -2118,7 +2118,7 @@ export default function App() {
               title="Entire — Trails"
             >
               {dotFor('entire')}
-              <EntireMark size={18} />
+              <EntireMark size={16} />
               <span className="f-label">Entire</span>
             </button>
             <button
@@ -2127,7 +2127,7 @@ export default function App() {
               title="GitHub — pull requests and issues"
             >
               {dotFor('github')}
-              <GitHubMark size={18} />
+              <GitHubMark size={16} />
               <span className="f-label">GitHub</span>
             </button>
             <button
@@ -2136,7 +2136,7 @@ export default function App() {
               title="Linear — issues"
             >
               {dotFor('linear')}
-              <LinearMark size={18} />
+              <LinearMark size={16} />
               <span className="f-label">Linear</span>
             </button>
           </div>
@@ -2330,7 +2330,7 @@ export default function App() {
               <button className="icon-btn" onClick={() => addTermPane('herdr')} title="Boot the herdr TUI in a new pane">
                 ▤ Open herdr
               </button>
-              <span className="note">Panes stay alive when you switch tabs. “Open herdr” boots the herdr TUI in a pane. Shortcuts: Ctrl+Shift+D split · Ctrl+Shift+Q close pane · Ctrl+Shift+←/→ move between panes. Right-click a pane for more.</span>
+              <span className="note">Panes stay alive when you switch tabs. “Open herdr” boots the herdr TUI in a pane. <kbd>Ctrl+Shift+D</kbd> split · <kbd>Ctrl+Shift+Q</kbd> close pane · <kbd>Ctrl+Shift+←/→</kbd> move between panes · right-click a pane for more.</span>
             </div>
             <div className="terminal-panes">
               <Suspense

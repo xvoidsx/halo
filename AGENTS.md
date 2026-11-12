@@ -328,6 +328,26 @@ what to build, where things live, and the lessons that apply here.
   redraw, both downstream of Halo. Do not over-split a herdr
   workspace; if an agent looks cut off, resizing the pane or
   re-attaching is the practical fix.
+- **2026-11-12 (0.11.0 bench, Raven): the clip is back — and the
+  mechanism is now photographed.** Two probe scripts
+  (`scripts/opencode-width-probe.mjs`,
+  `scripts/opencode-herdr-view-probe.mjs`) with screenshots in the
+  tree (`.tmp-opencode-*.png`): a DIRECT attach
+  (`herdr agent attach w1:p2` in a Halo pane) renders opencode
+  FULLY at 68 cols — logo, prompt, footer all visible. The clip
+  lives in the NESTED case, Halo pane -> herdr TUI -> herdr
+  workspace panes -> opencode. At full Halo width (140 cols) the
+  herdr TUI gives opencode's sub-pane ~200px: the logo is cut off
+  mid-word and the prompt wraps character by character. At split
+  Halo width (68 cols) the TUI squeezes it further and opencode
+  SEGFAULTS (Bun crash report in the pane) and drops off
+  `herdr agent list` entirely — the agent has to be restarted
+  (the rig rebuild does it). So: the nested herdr TUI is the
+  fragile path; the direct attach is the safe one. Halo-side
+  mitigations (the 0.13.0 QoL answer): per-pane font zoom and
+  pane maximize, so the user can give a pane the width opencode
+  needs; the standing guidance stays — use Chat attach for agents
+  instead of the nested herdr TUI when panes are narrow.
 - Agent messages in the chat are text actually read from the pane. If a
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —
@@ -738,6 +758,35 @@ what to build, where things live, and the lessons that apply here.
   passed on immediate re-run — the known 0.6.1 attach-start race is
   the candidate, unproven at the micro level. No code change; if it
   recurs, lengthen the test's poll/retry, not the app.
+- **0.12.0 — sidebar narrow fix + aesthetic hints (2026-11-12).**
+  Raven's first-night bench notes: the Linear logo drifts
+  off-screen when shrunk and the text below the forge buttons
+  vanishes; the Terminal hint bar clips mid-shortcut. The probe
+  (`scripts/sidebar-overflow-probe.mjs`, deleted after — its checks
+  now live in connections-test) found exactly one overflowing
+  element at the default 280px: `.forge-switch` itself
+  (scrollWidth 270 vs clientWidth 259) — the buttons are `flex: 1`
+  with no `min-width: 0`, so they refuse to shrink below content
+  and the row scrolls sideways (the horizontal scrollbar in the
+  screenshots) and pushes Linear off at narrower widths. The notes
+  already wrapped; the "vanishing" text was the switcher's
+  scrollbar side effect. Fix: `min-width: 0` + `overflow: hidden`
+  on `.forge-btn`, an ellipsis rule on `.f-label`, and tightened
+  chrome (3px gaps, 2px padding, 16px marks, `flex: 1 1 auto` so
+  the longest label gets its share first). **Trap:** the first
+  pass (4px gaps, 3px padding, 18px marks) still truncated
+  "GitHub" to "GitH…" at the default width — measured, the label
+  needs 40px in Noto Sans 12px and had 38. The numbers in the
+  comment are measured, not estimated: verify with a live DOM
+  measure (children's scrollWidth vs clientWidth), not arithmetic.
+  The hint bar: `.terminal-toolbar .note` is a flex item, so it
+  also needed `min-width: 0` to wrap at all; the shortcuts are now
+  `kbd` chips (pink-tinted border, mono, `white-space: nowrap`)
+  so the help reads as part of the neon. `scripts/shot.mjs` is the
+  quick visual check (reloads first — a stale bundle once made a
+  fix look like it hadn't landed). Full dev suite green on 0.12.0
+  (connections 13 checks incl. labelsWhole at 270/280 + the hint
+  wrap; chat-list flaked once on attachRenders, passed on re-run).
 
 ## Terminal (xterm.js + node-pty)
 
