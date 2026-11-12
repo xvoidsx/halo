@@ -17,7 +17,8 @@
 //     Unmaximize brings it back.
 //  6. Two panes survive a page reload (layout persistence), then
 //     closing back to one persists a one-pane layout.
-//  7. Ctrl+F opens the find bar; "root" is found; Esc closes it.
+//  7. Ctrl+F opens the find bar; a marker typed into the pane
+//     is found; Esc closes it.
 //
 // Usage: node scripts/qol-test.mjs [port]
 import * as fs from 'node:fs';
@@ -260,6 +261,13 @@ const layoutSaved = await evalJs(
 check('closing back to one pane persists a one-pane layout', layoutSaved === 1, `got ${layoutSaved}`);
 
 // --- 7. In-pane find ---
+// The search target is typed into the pane first — the prompt's
+// username is user-dependent (root in the dev sandbox, halotest in
+// the packaged run), so searching for 'root' only passes as root.
+await evalJs(`document.querySelector('.terminal-host')?.click()`);
+await sleep(300);
+await send('Input.insertText', { text: 'echo HALO_FIND_ME\r' });
+await sleep(800);
 await chord('f', 'KeyF', 70);
 const findOpen = await waitFor(
   `(() => {
@@ -268,7 +276,7 @@ const findOpen = await waitFor(
   })()`,
 );
 check('Ctrl+F opens the find bar with its input focused', findOpen === true);
-await send('Input.insertText', { text: 'root' });
+await send('Input.insertText', { text: 'HALO_FIND_ME' });
 const found = await waitFor(
   `(() => {
     const state = document.querySelector('.term-search-state')?.textContent ?? '';
@@ -276,7 +284,7 @@ const found = await waitFor(
     return state === 'found' && !input?.classList.contains('no-match') ? true : null;
   })()`,
 );
-check('typing "root" finds a match in the pane', found === true);
+check('typing "HALO_FIND_ME" finds a match in the pane', found === true);
 await chord('Escape', 'Escape', 27, 0);
 await sleep(500);
 const findClosed = await evalJs(`!document.querySelector('.term-search')`);
