@@ -97,12 +97,18 @@ const spawnOpts = await waitFor(
     return [...sel.options].map((o) => o.value);
   })()`,
 );
-// In this sandbox opencode + pi + codex are on PATH (codex ships
-// in /opt/hatch-image/bin); omp + hermes are not. The list is the
-// installed set, whatever the machine has.
+// The installed set is machine-dependent: the dev rig has codex on
+// PATH (/opt/hatch-image/bin) but the packaged halotest rig does
+// not. Assert the guaranteed part — pi + opencode are always there
+// (fake pi + opencode ship on both rigs), omp + hermes never are —
+// and let codex float.
 check(
-  'spawn dropdown lists the installed kinds (opencode, pi, codex)',
-  Array.isArray(spawnOpts) && spawnOpts.includes('pi') && spawnOpts.includes('opencode') && spawnOpts.includes('codex') && spawnOpts.length === 3,
+  'spawn dropdown lists the installed kinds (pi, opencode, …)',
+  Array.isArray(spawnOpts) &&
+    spawnOpts.includes('pi') &&
+    spawnOpts.includes('opencode') &&
+    !spawnOpts.includes('omp') &&
+    !spawnOpts.includes('hermes'),
   `got ${JSON.stringify(spawnOpts)}`,
 );
 const missingNote = await evalJs(
