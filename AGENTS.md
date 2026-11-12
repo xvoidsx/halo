@@ -1,7 +1,8 @@
 # AGENTS.md — Halo
 
-Halo — a nightshade neon Electron shell that lets herdr run trails locally,
-with your repos and agents in one live view. Two-week spike (Nov 2026),
+Halo — a nightshade neon Electron shell that puts your whole workspace in
+one live view: herdr agents, Entire trails, GitHub pull requests, and
+Linear issues. Two-week spike (Nov 2026),
 Linear XVOIDSX-71, exploratory. This file is the repo's working notes:
 what to build, where things live, and the lessons that apply here.
 
@@ -606,12 +607,14 @@ what to build, where things live, and the lessons that apply here.
   0.10.0 (ui-smoke, settings, sidebar-shortcuts, trails, github,
   linear, chat-layout, keepalive, splits, chat-list, herdr-parser,
   herdr-e2e, pty-smoke, close, close-busy — close-busy raced the
-  app startup once, passed on immediate re-run). Tagline open:
-  Raven asked whether the sidebar's "herdr, trails, one live view"
-  should go (it describes the 0.7.0 app); options offered were
-  "your workspace, one live view" (Lain's pick — it can't go stale
-  when notes land), "agents, forges, one live view", "agents,
-  issues, one live view" — unpicked at pack time, left as-is.
+  app startup once, passed on immediate re-run). Tagline decided
+  the same night: Raven asked whether the sidebar's "herdr, trails,
+  one live view" should go (it describes the 0.7.0 app); options
+  offered were "your workspace, one live view" (Lain's pick — it
+  can't go stale when notes land), "agents, forges, one live view",
+  "agents, issues, one live view" — Raven picked "your workspace,
+  one live view", shipped as 0.10.1 (sidebar tagline + the README /
+  AGENTS.md one-liners, which now name all four forges).
 - **Rig spec correction (2026-11-12).** The intended herdr rig is
   THREE agents — fakepi on w1:p1, fakepi2, opencode-test — because
   chat-list-test requires a fakepi2 agent (it asserts row 2 and sends

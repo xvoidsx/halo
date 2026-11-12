@@ -1,8 +1,9 @@
 # halo
-A nightshadeNeon-soaked application for running Trails, with your repos and agents in one live view.
+A nightshadeNeon-soaked application for your whole workspace — agents, trails, pull requests, and issues in one live view.
 
-Halo — a nightshade neon Electron shell that lets herdr run trails locally,
-with your repos and agents in one live view.
+Halo — a nightshade neon Electron shell that puts your whole workspace in
+one live view: herdr agents, Entire trails, GitHub pull requests, and
+Linear issues.
 
 ## Run it
 

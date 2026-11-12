@@ -1575,7 +1575,7 @@ export default function App() {
       <aside className="sidebar" style={{ width: sidebarWidth, flex: `0 0 ${sidebarWidth}px` }}>
         <div className="brand">
           <h1>HALO</h1>
-          <p className="tagline">herdr, trails, one live view</p>
+          <p className="tagline">your workspace, one live view</p>
         </div>
         <AgentSwitcher
           herdr={herdr}
