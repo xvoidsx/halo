@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react
 import type { AgentStatus, HaloSettings, HerdrAgent, HerdrState, Trail } from './types.js';
 import type { TermPane } from './Terminal.js';
 import { defaultSettings } from './types.js';
-import AgentChat from './AgentChat.js';
+import ChatView from './ChatView.js';
 
 // The terminal pulls in xterm.js (~450 kB) — lazy-load it so the trail
 // view stays light on old hardware and the terminal chunk only loads
@@ -457,12 +457,12 @@ export default function App() {
     if (view === 'terminal') setTermMounted(true);
   }, [view]);
 
-  const addTermPane = useCallback((command?: string) => {
+  const addTermPane = useCallback((command?: string, title?: string) => {
     setTermPanes((panes) => [
       ...panes,
       {
         id: `pane-${Date.now().toString(36)}`,
-        title: command ?? 'shell',
+        title: title ?? command ?? 'shell',
         cwd: panes[0]?.cwd ?? '',
         command,
       },
@@ -561,19 +561,17 @@ export default function App() {
         </div>
         {view === 'trail' && selected && <TrailView trail={selected} />}
         {view === 'trail' && !selected && <TrailsEmpty onOpenTerminal={() => setView('terminal')} />}
-        {view === 'chat' &&
-          (activeAgent ? (
-            <AgentChat key={activeAgent.paneId} agent={activeAgent} />
-          ) : (
-            <div className="main-body">
-              <p className="empty">No agent selected.</p>
-              <p className="note">
-                {herdr && !herdr.installed
-                  ? 'herdr is not installed on this machine — start herdr and come back.'
-                  : 'Pick a live agent from the Agents switcher — chat talks to it by pane_id.'}
-              </p>
-            </div>
-          ))}
+        {view === 'chat' && (
+          <ChatView
+            herdr={herdr}
+            activePaneId={settings.activeAgentPaneId}
+            onPickAgent={(paneId) => setSettings((s) => ({ ...s, activeAgentPaneId: paneId }))}
+            onJumpToTerminal={(paneId) => {
+              const a = herdr?.agents.find((x) => x.paneId === paneId);
+              addTermPane(`herdr agent attach ${paneId}`, `herdr · ${a?.label ?? paneId}`);
+            }}
+          />
+        )}
         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} />}
         {termMounted && (
           <div className={`terminal-view ${view === 'terminal' ? '' : 'hidden'}`}>

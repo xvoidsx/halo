@@ -77,8 +77,11 @@ export class TerminalManager {
 
   /** Spawn a shell in `cwd` (home when empty). `command` runs a program
    * directly instead of the login shell — 'herdr' boots the herdr TUI
-   * in the pane. Returns an error (never a fake shell) when the
-   * directory does not exist or is not a directory on this machine. */
+   * in the pane, 'herdr agent attach w1:p1' attaches that agent's pane.
+   * The command is split on whitespace into program + args (no shell
+   * quoting) — node-pty's spawn takes program and args separately.
+   * Returns an error (never a fake shell) when the directory does not
+   * exist or is not a directory on this machine. */
   spawn(repoId: string, cwd: string, cols: number, rows: number, command?: string): TermSpawnResult {
     const dir = cwd.trim() || os.homedir();
     if (!this.pty) {
@@ -94,11 +97,13 @@ export class TerminalManager {
     if (!stat.isDirectory()) {
       return { ok: false, detail: `Repo path is not a directory: ${dir}` };
     }
-    const shell = command?.trim() || process.env.SHELL || '/bin/bash';
+    const parts = command?.trim().split(/\s+/) ?? [];
+    const shell = parts[0] || process.env.SHELL || '/bin/bash';
+    const args = parts.slice(1);
     const id = `term-${++this.counter}-${Date.now().toString(36)}`;
     let child: ptyTypes.IPty;
     try {
-      child = this.pty.spawn(shell, [], {
+      child = this.pty.spawn(shell, args, {
         name: 'xterm-256color',
         cols: Math.max(20, cols || 80),
         rows: Math.max(5, rows || 24),
@@ -114,7 +119,7 @@ export class TerminalManager {
       this.sendExit(id, exitCode);
     });
     this.terms.set(id, { id, repoId, cwd: dir, shell, pty: child });
-    return { ok: true, id, detail: `${command?.trim() ? `Running ${shell}` : `Shell ${shell} started`} in ${dir}` };
+    return { ok: true, id, detail: `${command?.trim() ? `Running ${command.trim()}` : `Shell ${shell} started`} in ${dir}` };
   }
 
   write(id: string, data: string): TermOpResult {

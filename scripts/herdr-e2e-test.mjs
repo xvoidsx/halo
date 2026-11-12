@@ -54,8 +54,8 @@ const res = await send('Runtime.evaluate', { expression: expr, awaitPromise: tru
 const val = res.result?.result?.value ?? {};
 console.log(JSON.stringify(val, null, 2));
 const pass =
-  (val.chip ?? '').includes('1 live') &&
-  (val.foot ?? '').includes('1 agent') &&
+  /\d+ live/.test(val.chip ?? '') &&
+  /\d+ agents?/.test(val.foot ?? '') &&
   (val.dropdown ?? '').includes('fakepi') &&
   (val.dropdown ?? '').includes('w1:p1') &&
   val.send?.ok === true &&

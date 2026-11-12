@@ -27,10 +27,11 @@ what to build, where things live, and the lessons that apply here.
   per repo).
 - `src/` — renderer (React + Vite): `App.tsx` (sidebar trails, main trail
   view, settings, terminal + chat tabs), `Terminal.tsx` (xterm.js panel,
-  lazy-loaded), `AgentChat.tsx` (chat pane, polls `herdr agent read`),
-  `theme.css` (nightshadeNeon), `types.ts` (shared types).
-  No placeholder data anywhere — an empty trail list means no trail has
-  run yet.
+  lazy-loaded), `ChatView.tsx` (chat list + polling + per-agent
+  transcripts), `AgentChat.tsx` (one agent's chat pane: sticky-bottom log,
+  input, jump-to-terminal), `theme.css` (nightshadeNeon), `types.ts`
+  (shared types). No placeholder data anywhere — an empty trail list means
+  no trail has run yet.
 - `electron-builder.yml` — Linux `.deb` packaging. Output goes to `release/`
   (not `dist/`, which is Vite's renderer output). node-pty ships in the
   package (`files` + `asarUnpack` — the .node binary cannot load from
@@ -47,19 +48,38 @@ what to build, where things live, and the lessons that apply here.
   raw lines). Verify the real format on a machine with herdr installed
   before trusting the agent list.
 
-## Agent chat (herdr send / read)
+## Agent chat (herdr prompt / read) + chat list (0.3.0)
 
-- Chat is `agent send <pane_id> <text>` (literal text, no Enter) followed
-  by `agent send-keys <pane_id> enter` to submit, and `agent read
-  <pane_id> --source recent-unwrapped --lines N` (plain terminal text)
-  polled every 2 s. Documented in herdr's CLI reference (herdr.dev,
-  v0.7–0.9).
+- Chat is `agent prompt <pane_id> <text>` (types AND submits in one call)
+  and `agent read <pane_id> --source recent-unwrapped --lines N` (plain
+  terminal text). **Verified live against herdr 0.9.5** (scripts/
+  herdr-e2e-test.mjs, chat-list-test.mjs). `agent send` does NOT exist —
+  see "Herdr CLI — verified live" below.
 - `agent attach` is never used for chat — it takes over the current
-  terminal, which a GUI window cannot do.
-- The send/read path is **not yet verified on a machine with herdr
-  installed** (herdr is absent in this sandbox). The adapter returns
-  honest errors; the UI shows them as system lines in the chat. Bench it
-  on a real machine before trusting it.
+  terminal, which a GUI window cannot do. It IS used for jump-to-terminal:
+  a terminal pane runs `herdr agent attach <pane_id>` and renders the
+  agent's live screen (verified: the attach shows the agent's pane
+  output). Observation: attaching the same pane twice bumps the first
+  attach (it exits, code 1) — herdr behaviour, not a Halo bug.
+- **ChatView owns the chat** (`src/ChatView.tsx`): the agent list (the
+  agent center's jump-in list, as a GUI — click a row, or arrow to it and
+  hit Enter), ordered blocked → working → idle like the center; one-line
+  preview of each agent's latest output; a pink unread dot when an agent
+  produces output while you look elsewhere. The selected agent is read
+  every 2 s; the others are swept every ~10 s for previews/dots.
+  Transcripts live per pane_id (cap 500 messages each) so jumping between
+  chats never loses history. AgentChat is presentational: one agent's log
+  + input + jump-to-terminal button.
+- **Sticky-bottom scroll**: new output only pulls the log to the latest
+  while you are already at the bottom. Scroll up and it stays put, with a
+  "↓ Jump to latest" pill when new messages land above you.
+- Pane output is raw terminal text — ANSI escapes are stripped from the
+  displayed copy (the diff still runs on the raw output) so the chat
+  reads as text, not cursor-movement noise.
+- **Terminal spawn splits the command on whitespace** into program + args
+  (node-pty takes them separately) — `herdr agent attach w1:p1` works,
+  and the pane status shows the full command (`Running herdr agent
+  attach w1:p1 ...`). Plain `'herdr'` still boots the herdr TUI.
 - Agent messages in the chat are text actually read from the pane. If a
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —
@@ -148,15 +168,27 @@ what to build, where things live, and the lessons that apply here.
   `linux.syncDesktopName: true` in electron-builder.yml, so the Wayland
   app_id / WM_CLASS matches the .desktop entry and the launcher links the
   running window to it.
-- **`/usr/bin/halo` comes from the default postinst** (update-alternatives
-  symlink to /opt/Halo/halo, fallback `ln -sf`) — do NOT add a custom
-  afterInstall script for the symlink. A `deb.afterInstall` script DOES
-  exist now, but only for permission healing (`scripts/after-install.sh`:
-  /opt/Halo dirs to 755) — see the dpkg-dir-modes lesson above.
-  If `halo` is "command not found" after install, the package was never
-  configured: `dpkg -i` without deps installed leaves postinst unrun —
-  finish with `sudo apt -f install` (or install with
-  `sudo apt install ./halo_*.deb`, which resolves deps).
+- **`/usr/bin/halo` comes from our own after-install script, not the
+  default postinst** (2026-11-11, 0.3.0): setting `deb.afterInstall`
+  REPLACES electron-builder's default postinst, which is what registers
+  `/usr/bin/halo` via update-alternatives — so from 0.1.7 (when
+  `scripts/after-install.sh` was added) until 0.3.0, no install created
+  the symlink at all and `halo` was command-not-found even after a clean
+  apt install. Only rofi worked (its .desktop Exec points at
+  /opt/Halo/halo directly), so nobody noticed. `after-install.sh` now
+  registers the alternative itself (`update-alternatives --install
+  /usr/bin/halo halo /opt/Halo/halo 100`, falling back to `ln -sf`);
+  the postrm already removes it. Verify `/usr/bin/halo` exists after
+  every pack, and remember a `deb.afterInstall` script replaces — never
+  appends to — the default postinst.
+- **chrome-sandbox must be 4755 — set it in after-install.sh** (2026-11-11,
+  0.3.0): fpm strips the setuid bit when building the deb, so the
+  packaged app FATALs on machines without unprivileged user namespaces
+  ("The SUID sandbox helper binary was found, but is not configured
+  correctly") — this sandbox is one; Debian's default (user namespaces
+  on) is why Raven never hit it. `after-install.sh` now does
+  `chmod 4755 /opt/Halo/chrome-sandbox` (postinst runs as root). Verify
+  the mode after every pack.
 - **Running as root:** Electron FATALS without --no-sandbox, and the check
   fires in Electron's native launcher BEFORE Halo's JS runs — so no in-app
   fix can catch it (verified: a getuid/appendSwitch guard shipped in the

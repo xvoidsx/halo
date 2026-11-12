@@ -1,107 +1,96 @@
-// Agent chat — talk to a herdr agent directly, by pane_id.
+// Agent chat — talk to one herdr agent directly, by pane_id.
 //
-// Sends type a message into the agent's pane as literal text and press
-// Enter (`herdr agent send` + `agent send-keys enter`); replies stream
-// back by polling `herdr agent read` every two seconds and appending only
-// the new tail of the pane output. Nothing is fabricated: your messages
-// are the ones you typed, agent messages are text actually read from the
-// pane, and any failure shows up as a system line in the chat itself.
+// Sends type a message into the agent's pane with `herdr agent prompt`
+// (types AND submits in one call) and replies stream back from
+// `herdr agent read`, polled by the parent ChatView. Nothing is
+// fabricated: your messages are the ones you typed, agent messages are
+// text actually read from the pane, and any failure shows up as a system
+// line in the chat itself. The send/read path was verified live against
+// herdr 0.9.5 (see AGENTS.md).
 //
-// Honest limits, stated in the UI:
-// - The send/read path is documented (herdr.dev CLI reference, v0.7–0.9)
-//   but NOT yet verified on a machine with herdr installed.
-// - Messages are typed into the pane as literal text. If the agent is
-//   mid-task it may not see them until it reaches a prompt.
+// Scrolling is sticky-bottom, not pinned: new output only pulls you to
+// the latest while you are already at the bottom. Scroll up to read and
+// the log stays where you put it, with a "jump to latest" pill when new
+// messages land above you.
 
 import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage, HerdrAgent } from './types.js';
+import { nextChatId } from './types.js';
 
-const POLL_MS = 2000;
-const READ_LINES = 120;
-
-let msgCounter = 0;
-function nextId(prefix: string): string {
-  msgCounter += 1;
-  return `${prefix}-${Date.now().toString(36)}-${msgCounter}`;
-}
-
-export default function AgentChat({ agent }: { agent: HerdrAgent }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export default function AgentChat({
+  agent,
+  messages,
+  live,
+  readError,
+  onAppend,
+  onJumpToTerminal,
+}: {
+  agent: HerdrAgent;
+  messages: ChatMessage[];
+  live: boolean;
+  readError: string;
+  onAppend: (paneId: string, msg: ChatMessage) => void;
+  onJumpToTerminal: (paneId: string) => void;
+}) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [readError, setReadError] = useState('');
-  const [live, setLive] = useState(false);
-  const lastOutputRef = useRef('');
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // True while the log is at (or near) the bottom — only then does new
+  // output auto-scroll. Scrolling up unpins it; the pill offers the way
+  // back down.
+  const pinnedRef = useRef(true);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
 
-  // Poll the agent's pane output; append only what is new.
-  useEffect(() => {
-    if (!window.halo) {
-      setReadError('Agent chat needs the Electron app — it is not available in a browser preview.');
-      return;
-    }
-    let stopped = false;
-    const tick = async () => {
-      const res = await window.halo!.agentRead(agent.paneId, READ_LINES);
-      if (stopped) return;
-      if (!res.ok) {
-        setReadError(res.detail);
-        setLive(false);
-        return;
-      }
-      setReadError('');
-      setLive(true);
-      const prev = lastOutputRef.current;
-      if (res.output === prev) return;
-      let tail = res.output;
-      if (prev && res.output.startsWith(prev)) {
-        tail = res.output.slice(prev.length);
-      }
-      // If the pane scrolled past our window, `read` returns a fresh
-      // snapshot that no longer starts with the old one — show it whole
-      // rather than trying to diff scrollback we cannot see.
-      lastOutputRef.current = res.output;
-      if (!tail.trim()) return;
-      setMessages((m) => [
-        ...m,
-        { id: nextId('agent'), at: new Date().toLocaleTimeString(), from: 'agent', text: tail },
-      ]);
-    };
-    void tick();
-    const iv = window.setInterval(() => {
-      void tick();
-    }, POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(iv);
-    };
-  }, [agent.paneId]);
+  const onLogScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    pinnedRef.current = pinned;
+    if (pinned) setShowJumpLatest(false);
+  };
 
-  // Keep the log pinned to the latest output.
   useEffect(() => {
     const el = logRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (pinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowJumpLatest(false);
+    } else {
+      setShowJumpLatest(true);
+    }
   }, [messages]);
+
+  const jumpToLatest = () => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    pinnedRef.current = true;
+    setShowJumpLatest(false);
+  };
 
   const send = async () => {
     const text = input.trim();
     if (!text || sending || !window.halo) return;
     setSending(true);
-    setMessages((m) => [...m, { id: nextId('you'), at: new Date().toLocaleTimeString(), from: 'you', text }]);
+    onAppend(agent.paneId, {
+      id: nextChatId('you'),
+      at: new Date().toLocaleTimeString(),
+      from: 'you',
+      text,
+    });
     setInput('');
+    // Your own message — jump to the latest to see it land.
+    pinnedRef.current = true;
+    setShowJumpLatest(false);
     const res = await window.halo.agentSend(agent.paneId, text);
     setSending(false);
     if (!res.ok) {
-      setMessages((m) => [
-        ...m,
-        {
-          id: nextId('system'),
-          at: new Date().toLocaleTimeString(),
-          from: 'system',
-          text: `Could not send that message: ${res.detail}`,
-        },
-      ]);
+      onAppend(agent.paneId, {
+        id: nextChatId('system'),
+        at: new Date().toLocaleTimeString(),
+        from: 'system',
+        text: `Could not send that message: ${res.detail}`,
+      });
     }
     inputRef.current?.focus();
   };
@@ -111,14 +100,23 @@ export default function AgentChat({ agent }: { agent: HerdrAgent }) {
       <div className="chat-head">
         <span className="c-agent">{agent.label}</span>
         <span className="c-pane">{agent.paneId}</span>
-        <span className={`c-state ${live ? 'good' : 'warn'}`}>{live ? '● live' : readError ? '● not reading' : '● connecting…'}</span>
+        <span className={`c-state ${live ? 'good' : 'warn'}`}>
+          {live ? '● live' : readError ? '● not reading' : '● connecting…'}
+        </span>
+        <button
+          className="icon-btn c-jump"
+          onClick={() => onJumpToTerminal(agent.paneId)}
+          title={`Open ${agent.label}'s terminal in Halo (herdr agent attach ${agent.paneId})`}
+        >
+          ▤ Jump to terminal
+        </button>
       </div>
       <p className="note chat-caveat">
-        Messages are typed into the agent&apos;s pane as literal text, then Enter is sent. If the agent is mid-task it
-        may not answer until it reaches a prompt. This path uses <code>herdr agent send / read</code> — documented,
-        but not yet verified on a machine with herdr installed.
+        Messages are typed into the agent&apos;s pane with <code>herdr agent prompt</code> and replies are read back
+        with <code>herdr agent read</code> — verified live against herdr 0.9.5. If the agent is mid-task it may not
+        answer until it reaches a prompt.
       </p>
-      <div ref={logRef} className="chat-log">
+      <div ref={logRef} className="chat-log" onScroll={onLogScroll}>
         {readError && <p className="note warn chat-error">{readError}</p>}
         {messages.length === 0 && !readError && (
           <p className="empty">
@@ -137,6 +135,11 @@ export default function AgentChat({ agent }: { agent: HerdrAgent }) {
           </div>
         ))}
       </div>
+      {showJumpLatest && (
+        <button className="chat-jump-latest" onClick={jumpToLatest}>
+          ↓ Jump to latest
+        </button>
+      )}
       <div className="chat-input-row">
         <input
           ref={inputRef}

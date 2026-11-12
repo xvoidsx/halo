@@ -95,6 +95,14 @@ export interface ChatMessage {
   text: string;
 }
 
+let chatMsgCounter = 0;
+/** Unique ids for chat messages. One shared counter so the agent
+ * poller and the send path never mint the same key for one transcript. */
+export function nextChatId(prefix: string): string {
+  chatMsgCounter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${chatMsgCounter}`;
+}
+
 /** Result of sending a message to a herdr agent by pane_id. */
 export interface AgentSendResult {
   ok: boolean;
