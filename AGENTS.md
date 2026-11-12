@@ -497,6 +497,67 @@ what to build, where things live, and the lessons that apply here.
   Lesson: a guard must only touch APIs that are safe on the object it
   guards; verifying the guard's presence in the asar is not verifying
   it works.
+- **0.9.0 — GitHub-native view + forge switcher (2026-11-12).** The
+  sidebar's top is a forge switcher (Entire / GitHub marks, one
+  forge's list at a time); the GitHub view is PRs + issues together
+  via the `gh` CLI, with branch status read-only. Design, all
+  Raven-approved: Trails stays Entire-only (et/ projects under
+  Trails, gh/ mirrors under their own section inside the Entire
+  view); GitHub goes GitHub-native (PR check status + reviewers in
+  rows, labels/assignees on issues); push/pull buttons come only
+  after the read-only view proves itself. `electron/githubAdapter.ts`
+  is the boundary (new file, mirroring herdrAdapter.ts's Trails
+  shape): `runGh` (15 s, ENOENT → code -1), `listGitHub(repos,
+  localRepos)` (per-repo `gh pr list` / `gh issue list --state open
+  --limit 50 --json <fields>`; one repo's failure lands in the detail
+  note instead of blanking the others), `getPR` / `getIssue`
+  (`gh pr view` / `gh issue view --json`), `slugForPath` +
+  `statusForPath` (local git: origin → owner/repo, `git status
+  --porcelain=v2 --branch` → branch/ahead/behind/dirty). `gh` JSON
+  fields verified against the real CLI help (gh 2.102.0, JSON FIELDS
+  lists: pr — number, title, state, author, url, headRefName,
+  baseRefName, isDraft, reviewDecision, statusCheckRollup, additions,
+  deletions, changedFiles, comments, reviews, labels, createdAt,
+  body; issue — number, title, state, author, url, labels, assignees,
+  createdAt, comments, body). Checks map from `statusCheckRollup`:
+  any failure verdict fails the row, any run still going pends it,
+  anything else that completed passes; empty rollup is 'none'.
+  **Trap:** `gh ... view --json` returns `comments`/`reviews` as
+  ARRAYS, not numbers — the mapper counts them (`countOf`), a bare
+  number passes through. Settings holds a `github.repos` list
+  (owner/repo, one per line; `normalizeGitHub` in settingsFile.ts).
+  The renderer keeps the forge in localStorage (`halo.forge`) and the
+  GitHub selection/detail in the same shape as trails (`ghRef`
+  mirror, `ghDetailNote` for a failed detail fetch — the views take
+  the list row OR the fuller detail, and `'body' in pr` distinguishes
+  them, so "Loading description…" is honest while the call is in
+  flight). **Logos:** the switcher uses the vendors' own marks
+  unmodified, as platform indicators only — GitHub's brand page
+  explicitly permits this ("Show integration — Use a permitted GitHub
+  logo to inform others that your project integrates with GitHub");
+  use the Invertocat mark (not the full Octocat character, which has
+  tighter rules), in white/black, smaller than Halo's own logo, never
+  as Halo's branding and never implying endorsement. The Entire mark
+  is their favicon SVG (entire.com/favicon-dark.svg); the GitHub
+  mark is the official Invertocat. Both live as inline SVG in
+  `src/ForgeLogos.tsx` (currentColor, so the inactive forge dims).
+  **Verification:** fake `gh` in ~/workspace/.tmp/fakebin/gh serves
+  SYNTHESIZED fixtures in the real shapes (swap for real `gh`
+  output when Raven pastes it); `scripts/github-test.mjs` (10 checks:
+  not-configured note, both marks in the switcher, PR 42 passing /
+  PR 41 failing pills, issue 17, branch status from REAL git —
+  'main · up to date · 7 changed' on the dev tree — PR + issue
+  detail with body/comment counts/GitHub link, Settings field, and
+  switching back to Entire at the end so the next ui-smoke sees the
+  Trails view). Packaged runs need the fake copied to
+  /home/halotest/fakebin/gh AND `HALO_TEST_REPO` set to a repo
+  halotest owns (its test repo at /home/halotest/repos/halo-test,
+  origin github.com/xvoidsx/halo) — the root-owned tree is not
+  git-readable by halotest. Full dev suite green on 0.9.0
+  (ui-smoke, settings, sidebar-shortcuts, trails, github, chat-layout,
+  keepalive, splits, chat-list — flaked once on attachRenders, passed
+  on immediate re-run, the known timing flake — herdr-parser,
+  herdr-e2e, pty-smoke, close ×2, close-busy).
 - **Rig spec correction (2026-11-12).** The intended herdr rig is
   THREE agents — fakepi on w1:p1, fakepi2, opencode-test — because
   chat-list-test requires a fakepi2 agent (it asserts row 2 and sends

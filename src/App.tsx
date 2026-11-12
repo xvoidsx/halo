@@ -1,8 +1,20 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentStatus, HaloSettings, HerdrAgent, HerdrState, Trail } from './types.js';
+import type {
+  AgentStatus,
+  GitHubIssue,
+  GitHubIssueDetail,
+  GitHubPR,
+  GitHubPRDetail,
+  HaloSettings,
+  HerdrAgent,
+  HerdrState,
+  RepoStatus,
+  Trail,
+} from './types.js';
 import type { TermPane } from './Terminal.js';
 import { defaultSettings } from './types.js';
 import ChatView from './ChatView.js';
+import { EntireMark, GitHubMark } from './ForgeLogos.js';
 
 // The terminal pulls in xterm.js (~450 kB) — lazy-load it so the trail
 // view stays light on old hardware and the terminal chunk only loads
@@ -330,6 +342,131 @@ function TrailView({ trail }: { trail: Trail }) {
   );
 }
 
+const CHECK_PILL: Record<string, string> = {
+  passing: 'green',
+  failing: 'red',
+  pending: 'amber',
+  none: '',
+};
+
+function GitHubEmpty({ detail }: { detail?: string }) {
+  return (
+    <div className="main-body">
+      <p className="empty-title">Nothing selected</p>
+      <p className="note">Pick a pull request or an issue from the sidebar.</p>
+      {detail && <p className="note warn">{detail}</p>}
+    </div>
+  );
+}
+
+// The detail view takes the list row OR the fuller detail — the
+// row renders immediately (title, checks, labels are all in it) and
+// the description/comments fill in when `gh pr view` / `gh issue
+// view` lands. `'body' in pr` is false on a list row (the field is
+// absent, not empty), so "Loading description…" is honest while the
+// call is in flight, and `loadNote` carries a failed fetch's reason
+// instead of a permanent loading state.
+function GitHubPRView({ pr, loadNote }: { pr: GitHubPR | GitHubPRDetail; loadNote?: string }) {
+  const hasBody = 'body' in pr;
+  const hasComments = 'comments' in pr;
+  const hasFiles = 'changedFiles' in pr;
+  return (
+    <div className="main-body">
+      <p className="meta">
+        {[pr.repo, `#${pr.number}`, pr.author ? `by ${pr.author}` : '', `${pr.headRef} → ${pr.baseRef}`]
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
+      <p className="note">
+        <span className={`pill ${CHECK_PILL[pr.checks] ?? 'cyan'}`}>checks: {pr.checks}</span>{' '}
+        {pr.reviewDecision && <span className="pill cyan">{pr.reviewDecision.toLowerCase().replaceAll('_', ' ')}</span>}{' '}
+        {pr.draft && <span className="pill amber">draft</span>}{' '}
+        <span className="pill cyan">{pr.state}</span>
+      </p>
+      <p className="note">
+        +{pr.additions} −{pr.deletions}
+        {hasFiles ? ` · ${pr.changedFiles} files changed` : ''}
+        {hasComments ? ` · ${pr.comments} comment${pr.comments === 1 ? '' : 's'}` : ''}
+      </p>
+      {pr.labels.length > 0 && (
+        <p className="note">
+          {pr.labels.map((l) => (
+            <span key={l} className="pill cyan">
+              {l}
+            </span>
+          ))}
+        </p>
+      )}
+      {pr.url && (
+        <p className="note">
+          <a href={pr.url} target="_blank" rel="noreferrer">
+            Open on GitHub ↗
+          </a>
+        </p>
+      )}
+      <div className="section">
+        <h3>Description</h3>
+        {hasBody ? (
+          pr.body ? (
+            <p className="gh-body">{pr.body}</p>
+          ) : (
+            <p className="note">No description.</p>
+          )
+        ) : (
+          <p className="note warn">{loadNote || 'Loading description…'}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GitHubIssueView({ issue, loadNote }: { issue: GitHubIssue | GitHubIssueDetail; loadNote?: string }) {
+  const hasBody = 'body' in issue;
+  const hasComments = 'comments' in issue;
+  return (
+    <div className="main-body">
+      <p className="meta">
+        {[issue.repo, `#${issue.number}`, issue.author ? `by ${issue.author}` : '']
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
+      <p className="note">
+        <span className="pill cyan">{issue.state}</span>{' '}
+        {issue.labels.map((l) => (
+          <span key={l} className="pill cyan">
+            {l}
+          </span>
+        ))}
+      </p>
+      {issue.assignees.length > 0 && <p className="note">Assigned to {issue.assignees.join(', ')}.</p>}
+      {hasComments && (
+        <p className="note">
+          {issue.comments} comment{issue.comments === 1 ? '' : 's'}
+        </p>
+      )}
+      {issue.url && (
+        <p className="note">
+          <a href={issue.url} target="_blank" rel="noreferrer">
+            Open on GitHub ↗
+          </a>
+        </p>
+      )}
+      <div className="section">
+        <h3>Description</h3>
+        {hasBody ? (
+          issue.body ? (
+            <p className="gh-body">{issue.body}</p>
+          ) : (
+            <p className="note">No description.</p>
+          )
+        ) : (
+          <p className="note warn">{loadNote || 'Loading description…'}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
   setSettings,
@@ -459,6 +596,34 @@ function SettingsView({
         logged in. Until a project is set, the Trails list stays empty.
       </p>
 
+      <h3>GitHub</h3>
+      <label>
+        Repos (one per line)
+        <textarea
+          rows={3}
+          value={settings.github.repos.join('\n')}
+          onChange={(e) =>
+            setSettings({
+              ...settings,
+              github: {
+                ...settings.github,
+                repos: e.target.value
+                  .split('\n')
+                  .map((r) => r.trim())
+                  .filter(Boolean),
+              },
+            })
+          }
+          placeholder={'xvoidsx/halo\nxvoidsx/navi'}
+        />
+      </label>
+      <p className="note">
+        Pull requests and issues come from `gh pr list` / `gh issue list`, so the `gh` CLI must be installed and
+        logged in (`gh auth login`) — Halo never holds a token of its own. Branch status (ahead/behind, dirty) is
+        read from the local checkouts in Settings → Repos whose origin is the same GitHub repo. Read-only for now:
+        no push, pull, or merge from Halo yet.
+      </p>
+
       <h3>Ollama — local-first</h3>
       <label>
         Base URL
@@ -578,6 +743,33 @@ export default function App() {
   // list carries intent only; the detail survives list refreshes
   // because it lives here, not in the list rows.
   const [trailDetails, setTrailDetails] = useState<Record<string, Trail>>({});
+  // The forge switcher: Entire (Trails) or GitHub (PRs + issues). One
+  // forge's list is visible at a time; the other keeps its selection.
+  // A UI preference, so it lives in localStorage like the sidebar
+  // width — not in settings.json.
+  const [forge, setForge] = useState<'entire' | 'github'>(() => {
+    try {
+      return window.localStorage.getItem('halo.forge') === 'github' ? 'github' : 'entire';
+    } catch {
+      return 'entire';
+    }
+  });
+  // GitHub lists, from the `gh` CLI (main reads the configured repos
+  // from settings). Same shape as the trails side: a synchronous
+  // mirror for the detail effect, a detail note for the empty states,
+  // and per-item details that survive the 30 s list refresh.
+  const [prs, setPrs] = useState<GitHubPR[]>([]);
+  const [issues, setIssues] = useState<GitHubIssue[]>([]);
+  const [statuses, setStatuses] = useState<RepoStatus[]>([]);
+  const [githubDetail, setGithubDetail] = useState('');
+  const [ghPRDetails, setGhPRDetails] = useState<Record<string, GitHubPRDetail>>({});
+  const [ghIssueDetails, setGhIssueDetails] = useState<Record<string, GitHubIssueDetail>>({});
+  // Why the selected item's description is still loading (or why the
+  // detail fetch failed) — the views show this instead of a permanent
+  // "Loading description…".
+  const [ghDetailNote, setGhDetailNote] = useState('');
+  const [selectedGhId, setSelectedGhId] = useState<string>('');
+  const ghRef = useRef<{ prs: GitHubPR[]; issues: GitHubIssue[] }>({ prs: [], issues: [] });
   const [settings, setSettings] = useState<HaloSettings>(defaultSettings);
   const [herdr, setHerdr] = useState<HerdrState | null>(null);
   // Terminal panes are first-class: one shell by default, at home —
@@ -678,6 +870,50 @@ export default function App() {
     setView('trail');
   }, []);
 
+  // GitHub lists come from the `gh` CLI (main reads the configured
+  // repos from settings). Same 30 s cadence as trails — the list call
+  // hits the GitHub API over the network.
+  const refreshGitHub = useCallback(() => {
+    if (!window.halo) return;
+    void window.halo.listGitHub().then((res) => {
+      setPrs(res.prs);
+      setIssues(res.issues);
+      setStatuses(res.statuses);
+      ghRef.current = { prs: res.prs, issues: res.issues };
+      setGithubDetail(res.detail);
+      setSelectedGhId((prev) => {
+        const ids = new Set([...res.prs.map((p) => p.id), ...res.issues.map((i) => i.id)]);
+        if (prev && ids.has(prev)) return prev;
+        return res.prs[0]?.id ?? res.issues[0]?.id ?? '';
+      });
+    });
+  }, []);
+
+  // Picking a PR or issue switches to the detail view; the detail
+  // effect below fetches its full view via `gh pr view` / `gh issue
+  // view`.
+  const selectGh = useCallback((id: string) => {
+    setGhDetailNote('');
+    setSelectedGhId(id);
+    setView('trail');
+  }, []);
+
+  // Switching forges remembers the choice and refreshes the GitHub
+  // list when landing on it — a PR opened after launch still shows
+  // up live.
+  const switchForge = useCallback(
+    (next: 'entire' | 'github') => {
+      setForge(next);
+      try {
+        window.localStorage.setItem('halo.forge', next);
+      } catch {
+        // Private mode or no storage — the switch still works.
+      }
+      if (next === 'github') refreshGitHub();
+    },
+    [refreshGitHub],
+  );
+
   useEffect(() => {
     // No trail data is faked anywhere: the list starts empty and only
     // fills when a real trail source is wired up. In a plain browser
@@ -690,17 +926,20 @@ export default function App() {
       return;
     }
     refreshTrails();
+    refreshGitHub();
     void window.halo.getSettings().then(setSettings);
     refreshHerdr();
     // Live detection: herdr agents come and go — re-check while Halo is
     // open, so an agent started after launch still shows up.
     const timer = window.setInterval(refreshHerdr, 10000);
     const trailTimer = window.setInterval(refreshTrails, 30000);
+    const ghTimer = window.setInterval(refreshGitHub, 30000);
     return () => {
       window.clearInterval(timer);
       window.clearInterval(trailTimer);
+      window.clearInterval(ghTimer);
     };
-  }, [refreshHerdr, refreshTrails]);
+  }, [refreshHerdr, refreshTrails, refreshGitHub]);
 
   // The list carries intent only; the detail view comes from
   // `entire trail show`, fetched when a trail is picked (or on first
@@ -719,6 +958,41 @@ export default function App() {
       cancelled = true;
     };
   }, [selectedId]);
+
+  // The list carries intent only; the detail view comes from
+  // `gh pr view` / `gh issue view`, fetched when a row is picked (or
+  // on first load). It lands in the detail records, so the 30 s list
+  // refresh never clobbers a fuller item with its thin list row.
+  useEffect(() => {
+    if (!selectedGhId || !window.halo) return;
+    const pr = ghRef.current.prs.find((p) => p.id === selectedGhId);
+    const issue = !pr ? ghRef.current.issues.find((i) => i.id === selectedGhId) : undefined;
+    let cancelled = false;
+    if (pr) {
+      void window.halo.getPR(pr.repo, pr.number).then((res) => {
+        if (cancelled) return;
+        if (!res.pr) {
+          setGhDetailNote(res.detail);
+          return;
+        }
+        const full = res.pr;
+        setGhPRDetails((prev) => ({ ...prev, [full.id]: full }));
+      });
+    } else if (issue) {
+      void window.halo.getIssue(issue.repo, issue.number).then((res) => {
+        if (cancelled) return;
+        if (!res.issue) {
+          setGhDetailNote(res.detail);
+          return;
+        }
+        const full = res.issue;
+        setGhIssueDetails((prev) => ({ ...prev, [full.id]: full }));
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedGhId]);
 
   useEffect(() => {
     if (view === 'terminal') setTermMounted(true);
@@ -979,6 +1253,101 @@ export default function App() {
     </div>
   );
 
+  // The GitHub view groups PRs and issues by repo, in settings
+  // order — one group per owner/repo slug, with the local checkout's
+  // branch status under the header when one maps to it.
+  const ghGroups = useMemo(() => {
+    const order: string[] = [];
+    const byRepo = new Map<string, { prs: GitHubPR[]; issues: GitHubIssue[] }>();
+    const ensure = (repo: string) => {
+      let g = byRepo.get(repo);
+      if (!g) {
+        g = { prs: [], issues: [] };
+        byRepo.set(repo, g);
+        order.push(repo);
+      }
+      return g;
+    };
+    for (const p of prs) ensure(p.repo).prs.push(p);
+    for (const i of issues) ensure(i.repo).issues.push(i);
+    const configured = settings.github.repos;
+    order.sort((a, b) => {
+      const ia = configured.indexOf(a);
+      const ib = configured.indexOf(b);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    });
+    return order.map((repo) => ({
+      repo,
+      prs: byRepo.get(repo)?.prs ?? [],
+      issues: byRepo.get(repo)?.issues ?? [],
+      status: statuses.find((s) => s.repo === repo) ?? null,
+    }));
+  }, [prs, issues, statuses, settings.github.repos]);
+
+  const renderGhGroup = (group: { repo: string; prs: GitHubPR[]; issues: GitHubIssue[]; status: RepoStatus | null }) => (
+    <div key={group.repo} className="trail-group">
+      <h3 className="t-project">{group.repo}</h3>
+      {group.status && (
+        <p className="gh-status">
+          {group.status.branch}
+          {group.status.ahead > 0 || group.status.behind > 0
+            ? ` · ↑${group.status.ahead} ↓${group.status.behind}`
+            : ' · up to date'}
+          {group.status.dirty > 0 ? ` · ${group.status.dirty} changed` : ' · clean'}
+        </p>
+      )}
+      {group.prs.map((p) => (
+        <button
+          key={p.id}
+          className={`trail-row ${selectedGhId === p.id && view === 'trail' && forge === 'github' ? 'active' : ''}`}
+          onClick={() => selectGh(p.id)}
+        >
+          <div className="t-title">
+            {p.title}
+            <span className={`pill ${CHECK_PILL[p.checks] ?? 'cyan'}`}>checks: {p.checks}</span>
+          </div>
+          <div className="t-meta">
+            {`#${p.number} · ${p.author} · ${p.headRef} → ${p.baseRef}`}
+            {p.reviewDecision ? ` · ${p.reviewDecision.toLowerCase().replaceAll('_', ' ')}` : ''}
+            {p.draft ? ' · draft' : ''}
+          </div>
+        </button>
+      ))}
+      {group.issues.map((i) => (
+        <button
+          key={i.id}
+          className={`trail-row ${selectedGhId === i.id && view === 'trail' && forge === 'github' ? 'active' : ''}`}
+          onClick={() => selectGh(i.id)}
+        >
+          <div className="t-title">
+            {i.title}
+            <span className="pill cyan">{i.state}</span>
+          </div>
+          <div className="t-meta">
+            {`#${i.number} · ${i.author}`}
+            {i.labels.length > 0 ? ` · ${i.labels.join(', ')}` : ''}
+            {i.assignees.length > 0 ? ` · → ${i.assignees.join(', ')}` : ''}
+          </div>
+        </button>
+      ))}
+      {group.prs.length === 0 && group.issues.length === 0 && <p className="note">No open PRs or issues.</p>}
+    </div>
+  );
+
+  // The selected GitHub item's fuller detail, when fetched — else the
+  // thin list row, so the view still shows something while the
+  // detail call is in flight.
+  const selectedGh = useMemo(
+    () =>
+      selectedGhId
+        ? (ghPRDetails[selectedGhId] ??
+          ghIssueDetails[selectedGhId] ??
+          prs.find((p) => p.id === selectedGhId) ??
+          issues.find((i) => i.id === selectedGhId))
+        : undefined,
+    [selectedGhId, ghPRDetails, ghIssueDetails, prs, issues],
+  );
+
   // Dragging the sidebar's right edge resizes it. The width is
   // clamped live and saved when the drag ends, so it sticks.
   const onSidebarPointerDown = (e: React.PointerEvent) => {
@@ -1011,7 +1380,9 @@ export default function App() {
 
   const headTitle =
     view === 'trail'
-      ? (selected?.title ?? 'Trails')
+      ? forge === 'github'
+        ? (selectedGh?.title ?? 'GitHub')
+        : (selected?.title ?? 'Trails')
       : view === 'terminal'
         ? 'Terminal'
         : view === 'chat'
@@ -1035,11 +1406,42 @@ export default function App() {
           onRefresh={refreshHerdr}
         />
         <div className="trail-list">
-          <h2>Trails</h2>
-          {trails.length === 0 && <p className="note">{trailsDetail || 'No trails yet.'}</p>}
-          {trailGroups.et.map((g) => renderTrailGroup(g.project, g.trails))}
-          {trailGroups.gh.length > 0 && <h2>GitHub</h2>}
-          {trailGroups.gh.map((g) => renderTrailGroup(g.project, g.trails))}
+          <div className="forge-switch" role="tablist" aria-label="Forge">
+            <button
+              className={`forge-btn ${forge === 'entire' ? 'active' : ''}`}
+              onClick={() => switchForge('entire')}
+              title="Entire — Trails"
+            >
+              <EntireMark size={18} />
+              Entire
+            </button>
+            <button
+              className={`forge-btn ${forge === 'github' ? 'active' : ''}`}
+              onClick={() => switchForge('github')}
+              title="GitHub — pull requests and issues"
+            >
+              <GitHubMark size={18} />
+              GitHub
+            </button>
+          </div>
+          {forge === 'entire' && (
+            <>
+              <h2>Trails</h2>
+              {trails.length === 0 && <p className="note">{trailsDetail || 'No trails yet.'}</p>}
+              {trailGroups.et.map((g) => renderTrailGroup(g.project, g.trails))}
+              {trailGroups.gh.length > 0 && <h2>GitHub</h2>}
+              {trailGroups.gh.map((g) => renderTrailGroup(g.project, g.trails))}
+            </>
+          )}
+          {forge === 'github' && (
+            <>
+              <h2>Pull requests &amp; issues</h2>
+              {prs.length === 0 && issues.length === 0 && (
+                <p className="note">{githubDetail || 'No PRs or issues yet.'}</p>
+              )}
+              {ghGroups.map((g) => renderGhGroup(g))}
+            </>
+          )}
         </div>
         <button className="sidebar-foot" onClick={refreshHerdr} title="Refresh herdr agents">
           <span className={`status-light ${herdr ? (herdr.installed ? (herdr.agents.length ? 'green' : 'amber') : 'gray') : 'gray'}`}>●</span>
@@ -1072,10 +1474,11 @@ export default function App() {
             className={`icon-btn ${view === 'trail' ? 'active' : ''}`}
             onClick={() => {
               setView('trail');
-              refreshTrails();
+              if (forge === 'github') refreshGitHub();
+              else refreshTrails();
             }}
           >
-            Trails
+            {forge === 'github' ? 'GitHub' : 'Trails'}
           </button>
           <button
             className={`icon-btn ${view === 'terminal' ? 'active' : ''}`}
@@ -1093,8 +1496,17 @@ export default function App() {
             ⚙ Settings
           </button>
         </div>
-        {view === 'trail' && selected && <TrailView trail={selected} />}
-        {view === 'trail' && !selected && <TrailsEmpty onOpenTerminal={() => setView('terminal')} detail={trailsDetail} />}
+        {view === 'trail' && forge === 'entire' && selected && <TrailView trail={selected} />}
+        {view === 'trail' && forge === 'entire' && !selected && (
+          <TrailsEmpty onOpenTerminal={() => setView('terminal')} detail={trailsDetail} />
+        )}
+        {view === 'trail' && forge === 'github' && selectedGh && 'checks' in selectedGh && (
+          <GitHubPRView pr={selectedGh} loadNote={ghDetailNote} />
+        )}
+        {view === 'trail' && forge === 'github' && selectedGh && !('checks' in selectedGh) && (
+          <GitHubIssueView issue={selectedGh} loadNote={ghDetailNote} />
+        )}
+        {view === 'trail' && forge === 'github' && !selectedGh && <GitHubEmpty detail={githubDetail} />}
         {chatMounted && (
           <div className={`chat-view ${view === 'chat' ? '' : 'hidden'}`}>
             <ChatView

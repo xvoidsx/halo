@@ -3,6 +3,9 @@ import type { IpcRendererEvent } from 'electron';
 import type {
   AgentReadResult,
   AgentSendResult,
+  GitHubIssueDetailResult,
+  GitHubListResult,
+  GitHubPRDetailResult,
   HaloSettings,
   HerdrState,
   TermOpResult,
@@ -22,6 +25,11 @@ contextBridge.exposeInMainWorld('halo', {
   listTrails: (): Promise<TrailListResult> => ipcRenderer.invoke('halo:listTrails'),
   getTrail: (id: string, project: string): Promise<TrailDetailResult> =>
     ipcRenderer.invoke('halo:getTrail', id, project),
+  listGitHub: (): Promise<GitHubListResult> => ipcRenderer.invoke('halo:listGitHub'),
+  getPR: (repo: string, number: number): Promise<GitHubPRDetailResult> =>
+    ipcRenderer.invoke('halo:getPR', repo, number),
+  getIssue: (repo: string, number: number): Promise<GitHubIssueDetailResult> =>
+    ipcRenderer.invoke('halo:getIssue', repo, number),
   herdrStatus: (): Promise<HerdrState> => ipcRenderer.invoke('halo:herdrStatus'),
   watchTrail: (id: string): Promise<{ status: string; todo: string }> =>
     ipcRenderer.invoke('halo:watchTrail', id),

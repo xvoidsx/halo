@@ -6,7 +6,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { EntireConfig, HaloSettings } from '../src/types.js';
+import type { EntireConfig, GitHubConfig, HaloSettings } from '../src/types.js';
 import { defaultSettings } from '../src/types.js';
 
 const DIR = path.join(os.homedir(), '.config', 'halo');
@@ -35,6 +35,21 @@ function normalizeEntire(raw: unknown): EntireConfig {
   return { projects: [] };
 }
 
+/** The GitHub section holds a `repos` list of owner/repo slugs.
+ * Anything else in the slot (a stray string, a null) falls back to
+ * the empty list — never a crash, never invented repos. */
+function normalizeGitHub(raw: unknown): GitHubConfig {
+  const rec = (typeof raw === 'object' && raw !== null ? raw : {}) as { repos?: unknown };
+  if (Array.isArray(rec.repos)) {
+    const list = rec.repos
+      .filter((r): r is string => typeof r === 'string')
+      .map((r) => r.trim())
+      .filter(Boolean);
+    return { repos: [...new Set(list)] };
+  }
+  return { repos: [] };
+}
+
 export function loadSettings(): HaloSettings {
   try {
     const raw = fs.readFileSync(FILE, 'utf8');
@@ -44,6 +59,7 @@ export function loadSettings(): HaloSettings {
       ...parsed,
       ollama: { ...defaultSettings.ollama, ...(parsed.ollama ?? {}) },
       entire: normalizeEntire(parsed.entire),
+      github: normalizeGitHub(parsed.github),
       terminal: { ...defaultSettings.terminal, ...(parsed.terminal ?? {}) },
       byok: {
         openai: { ...defaultSettings.byok.openai, ...(parsed.byok?.openai ?? {}) },

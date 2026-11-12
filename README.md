@@ -63,8 +63,11 @@ no fake replies, ever.
 - Drag its right edge to resize it (200–420px); the width sticks across
   restarts.
 - The **Agents** switcher shows live agents with status lights and jumps
-  to the selected agent's chat. The trail list lives below it, and the
-  footer shows herdr's status (click ↻ to refresh).
+  to the selected agent's chat. Below it, the **forge switcher** flips
+  the list between Entire (Trails) and GitHub (pull requests + issues)
+  — the vendors' own marks, shown unmodified as platform indicators,
+  one forge's list at a time. The footer shows herdr's status (click ↻
+  to refresh).
 
 ### Trails
 
@@ -80,6 +83,22 @@ no fake replies, ever.
   suggested fixes, linked sessions/checkpoints, gates/approvals, the
   last five runs, and a link out to the trail on Entire. Until a
   project is set, the list stays empty and says why.
+
+### GitHub
+
+- Live from the `gh` CLI. Set the repos in Settings → GitHub, one per
+  line (`owner/repo`), and the list fills from `gh pr list --json` +
+  `gh issue list --json`, refreshing every 30 s. PR rows carry a
+  checks pill (passing / failing / pending / none, from
+  `statusCheckRollup`) and the review decision; issue rows carry labels
+  and assignees. Click a row for the detail (`gh pr view` / `gh issue
+  view --json`): description, comment count, and a link out to GitHub.
+- **Branch status is read-only:** each repo group shows the local
+  checkout's branch, ahead/behind, and dirty count, from `git status
+  --porcelain=v2 --branch` on the matching repo in Settings → Repos.
+  No push, pull, or merge from Halo yet — those come after the
+  read-only view proves itself. The `gh` CLI must be installed and
+  logged in; Halo never holds a token of its own.
 
 ### Settings
 
@@ -108,6 +127,14 @@ no fake replies, ever.
   one. The gh side is verified against a fixture transcribed from a
   screenshot so far; the real `gh/rav3ndust` JSON is still to be
   checked.
+- GitHub verified against the real `gh` 2.102.0 `--help` (JSON FIELDS
+  lists) and real `git status --porcelain=v2 --branch` output: PRs
+  carry `reviewDecision` + `statusCheckRollup` (any failure verdict
+  fails the row, any run still going pends it), issues carry labels +
+  assignees, and the branch line shows the local checkout's branch,
+  ahead/behind, and dirty count. The `gh` fixtures are synthesized
+  from the field lists until real `gh pr/issue list/view --json`
+  lands from Raven's machine — same swap as the Entire fixtures got.
 - In-app terminal: xterm.js in the renderer, node-pty shell in the main
   process (copland's stack: WebGL renderer with a canvas fallback, the
   terminal chunk lazy-loads so the trail view stays light). Pty resizes
@@ -120,6 +147,9 @@ no fake replies, ever.
 
 ## Not built yet
 
+- **Push / pull / merge from Halo.** The GitHub view is read-only on
+  purpose: branch status shows first, buttons come after it proves
+  itself (branch choice, dirty tree, and conflicts need careful UX).
 - **Live trail event streaming.** The list refreshes every 30 s and the
   detail loads on click; `entire trail watch --json` is not wired yet,
   so new events arrive on the next refresh, not live.
@@ -142,7 +172,8 @@ no fake replies, ever.
 
 ## Next steps
 
-1. Bench the 0.8.0 multi-project Trails build against the live trails (et/xvoidsx + gh/rav3ndust).
+1. Bench the 0.9.0 GitHub build: the forge switcher, PRs + issues
+   against the live repos, branch status, and the close dialog.
 2. Show it off in the Entire Discord after watching a Trail run.
 3. Ollama wiring (local-first default model) + BYOK provider calls.
 4. Horizontal splits (split-tree model).

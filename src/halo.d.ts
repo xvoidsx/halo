@@ -1,6 +1,9 @@
 import type {
   AgentReadResult,
   AgentSendResult,
+  GitHubIssueDetailResult,
+  GitHubListResult,
+  GitHubPRDetailResult,
   HaloSettings,
   HerdrState,
   TermOpResult,
@@ -17,6 +20,9 @@ declare global {
       saveSettings: (next: HaloSettings) => Promise<{ ok: true; path: string }>;
       listTrails: () => Promise<TrailListResult>;
       getTrail: (id: string, project: string) => Promise<TrailDetailResult>;
+      listGitHub: () => Promise<GitHubListResult>;
+      getPR: (repo: string, number: number) => Promise<GitHubPRDetailResult>;
+      getIssue: (repo: string, number: number) => Promise<GitHubIssueDetailResult>;
       herdrStatus: () => Promise<HerdrState>;
       watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
       agentSend: (paneId: string, text: string) => Promise<AgentSendResult>;

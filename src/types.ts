@@ -138,6 +138,94 @@ export interface TermOpResult {
   detail: string;
 }
 
+/** A GitHub pull request, mapped from `gh pr list/view --json`.
+ * Fields verified against the real `gh` 2.102.0 help (JSON FIELDS
+ * list, 2026-11-12): number, title, state, author, url, headRefName,
+ * baseRefName, isDraft, reviewDecision, statusCheckRollup, additions,
+ * deletions, changedFiles, comments, reviews, labels, createdAt, body. */
+export type GitHubCheckState = 'passing' | 'failing' | 'pending' | 'none';
+
+export interface GitHubPR {
+  /** `pr-<owner>/<repo>-<number>` — unique across repos. */
+  id: string;
+  /** owner/repo */
+  repo: string;
+  number: number;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  author: string;
+  url: string;
+  headRef: string;
+  baseRef: string;
+  draft: boolean;
+  checks: GitHubCheckState;
+  /** APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or '' when none. */
+  reviewDecision: string;
+  additions: number;
+  deletions: number;
+  labels: string[];
+  createdAt: string;
+}
+
+export interface GitHubPRDetail extends GitHubPR {
+  body: string;
+  comments: number;
+  changedFiles: number;
+}
+
+export interface GitHubIssue {
+  /** `issue-<owner>/<repo>-<number>` */
+  id: string;
+  /** owner/repo */
+  repo: string;
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  author: string;
+  url: string;
+  labels: string[];
+  assignees: string[];
+  createdAt: string;
+}
+
+export interface GitHubIssueDetail extends GitHubIssue {
+  body: string;
+  comments: number;
+}
+
+/** Branch status of one local checkout, from `git status
+ * --porcelain=v2 --branch`. Read-only: ahead/behind counts and a
+ * dirty-file count, never a push or pull (those are a later build,
+ * once the read-only view has proven itself). */
+export interface RepoStatus {
+  /** owner/repo, from the origin remote. */
+  repo: string;
+  path: string;
+  branch: string;
+  ahead: number;
+  behind: number;
+  dirty: number;
+  /** '' when the status is live, else why it is not. */
+  detail: string;
+}
+
+export interface GitHubListResult {
+  prs: GitHubPR[];
+  issues: GitHubIssue[];
+  statuses: RepoStatus[];
+  detail: string;
+}
+
+export interface GitHubPRDetailResult {
+  pr: GitHubPRDetail | null;
+  detail: string;
+}
+
+export interface GitHubIssueDetailResult {
+  issue: GitHubIssueDetail | null;
+  detail: string;
+}
+
 export interface RepoEntry {
   id: string;
   name: string;
@@ -171,12 +259,20 @@ export interface EntireConfig {
   projects: string[];
 }
 
+export interface GitHubConfig {
+  /** GitHub repos for the PR/issue lists, e.g. 'xvoidsx/halo'.
+   * `gh pr list` / `gh issue list` need --repo, so the lists stay
+   * empty until at least one is set. Empty = not configured. */
+  repos: string[];
+}
+
 export interface HaloSettings {
   repos: RepoEntry[];
   activeRepoId: string | null;
   activeAgentPaneId: string | null;
   ollama: OllamaConfig;
   entire: EntireConfig;
+  github: GitHubConfig;
   terminal: TerminalConfig;
   byok: {
     openai: ProviderConfig;
@@ -199,6 +295,7 @@ export const defaultSettings: HaloSettings = {
   activeAgentPaneId: null,
   ollama: { baseUrl: 'http://127.0.0.1:11434', defaultModel: 'qwen3:8b' },
   entire: { projects: [] },
+  github: { repos: [] },
   terminal: { fontSize: 13 },
   byok: {
     openai: { apiKey: '', enabled: false },

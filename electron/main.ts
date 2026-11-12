@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, settingsPath } from './settingsFile.js';
+import { getIssue, getPR, listGitHub } from './githubAdapter.js';
 import { detectHerdr, getTrail, listTrails, readAgentOutput, sendAgentMessage, watchTrail } from './herdrAdapter.js';
 import { TerminalManager } from './terminal.js';
 import type { HaloSettings } from '../src/types.js';
@@ -107,6 +108,13 @@ app.whenReady().then(() => {
   // with a detail that says why — never placeholder data.
   ipcMain.handle('halo:listTrails', () => listTrails(loadSettings().entire.projects));
   ipcMain.handle('halo:getTrail', (_e, id: string, project: string) => getTrail(id, (project ?? '').trim()));
+
+  // GitHub: PRs + issues + branch status, from the `gh` CLI and local
+  // git (see githubAdapter.ts). Read-only — no push, no pull, no
+  // merge from Halo yet.
+  ipcMain.handle('halo:listGitHub', () => listGitHub(loadSettings().github.repos, loadSettings().repos));
+  ipcMain.handle('halo:getPR', (_e, repo: string, number: number) => getPR((repo ?? '').trim(), number));
+  ipcMain.handle('halo:getIssue', (_e, repo: string, number: number) => getIssue((repo ?? '').trim(), number));
 
   // Herdr: real detection via the herdr CLI; trail watching is a stub
   // until `entire trail watch --json` streaming lands.
