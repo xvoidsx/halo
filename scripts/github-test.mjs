@@ -127,14 +127,16 @@ check(
   `got "${noteEmpty}"`,
 );
 
-// --- 2. The switcher shows both forge marks ---
+// --- 2. The switcher shows all three forge marks ---
+// (Was two in 0.9.0; Linear joined the switcher in 0.10.0.)
 const switcher = await evalJs(`[...document.querySelectorAll('.forge-btn')].map((b) => ({ text: b.textContent.trim(), svg: !!b.querySelector('svg') }))`);
 check(
-  'forge switcher shows Entire + GitHub with their marks',
+  'forge switcher shows Entire + GitHub + Linear with their marks',
   Array.isArray(switcher) &&
-    switcher.length === 2 &&
+    switcher.length === 3 &&
     switcher.some((b) => b.text === 'Entire' && b.svg) &&
-    switcher.some((b) => b.text === 'GitHub' && b.svg),
+    switcher.some((b) => b.text === 'GitHub' && b.svg) &&
+    switcher.some((b) => b.text === 'Linear' && b.svg),
   `got ${JSON.stringify(switcher)}`,
 );
 

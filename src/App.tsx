@@ -8,13 +8,15 @@ import type {
   HaloSettings,
   HerdrAgent,
   HerdrState,
+  LinearIssue,
+  LinearIssueDetail,
   RepoStatus,
   Trail,
 } from './types.js';
 import type { TermPane } from './Terminal.js';
 import { defaultSettings } from './types.js';
 import ChatView from './ChatView.js';
-import { EntireMark, GitHubMark } from './ForgeLogos.js';
+import { EntireMark, GitHubMark, LinearMark } from './ForgeLogos.js';
 
 // The terminal pulls in xterm.js (~450 kB) — lazy-load it so the trail
 // view stays light on old hardware and the terminal chunk only loads
@@ -467,6 +469,90 @@ function GitHubIssueView({ issue, loadNote }: { issue: GitHubIssue | GitHubIssue
   );
 }
 
+const LINEAR_PILL: Record<string, string> = {
+  backlog: '',
+  unstarted: '',
+  started: 'amber',
+  completed: 'green',
+  canceled: '',
+};
+
+function LinearEmpty({ detail }: { detail?: string }) {
+  return (
+    <div className="main-body">
+      <p className="empty-title">Nothing selected</p>
+      <p className="note">Pick an issue from the sidebar.</p>
+      {detail && <p className="note warn">{detail}</p>}
+    </div>
+  );
+}
+
+// The detail view takes the list row OR the fuller detail — the row
+// renders immediately (title, status, priority are all in it) and
+// the description/comments fill in when `get_issue` + `list_comments`
+// land. `'description' in issue` is false on a list row (the field
+// is absent, not empty — the list truncates it), so "Loading
+// description…" is honest while the call is in flight, and
+// `loadNote` carries a failed fetch's reason instead of a permanent
+// loading state.
+function LinearIssueView({ issue, loadNote }: { issue: LinearIssue | LinearIssueDetail; loadNote?: string }) {
+  const hasDescription = 'description' in issue;
+  const hasComments = 'comments' in issue;
+  return (
+    <div className="main-body">
+      <p className="meta">{[issue.id, issue.team, issue.createdBy ? `by ${issue.createdBy}` : ''].filter(Boolean).join(' · ')}</p>
+      <p className="note">
+        <span className={`pill ${LINEAR_PILL[issue.statusType] ?? ''}`}>{issue.status}</span>{' '}
+        {issue.priority && <span className="pill cyan">{issue.priority} priority</span>}{' '}
+        {issue.assignee && <span className="pill cyan">→ {issue.assignee}</span>}
+      </p>
+      {issue.labels.length > 0 && (
+        <p className="note">
+          {issue.labels.map((l) => (
+            <span key={l} className="pill cyan">
+              {l}
+            </span>
+          ))}
+        </p>
+      )}
+      {hasComments && (
+        <p className="note">
+          {issue.comments.length} comment{issue.comments.length === 1 ? '' : 's'}
+        </p>
+      )}
+      {hasComments &&
+        issue.comments.map((c) => (
+          <div key={c.id} className="section">
+            <p className="meta">
+              {c.author}
+              {c.createdAt ? ` · ${c.createdAt.slice(0, 10)}` : ''}
+            </p>
+            <p className="gh-body">{c.body}</p>
+          </div>
+        ))}
+      {issue.url && (
+        <p className="note">
+          <a href={issue.url} target="_blank" rel="noreferrer">
+            Open in Linear ↗
+          </a>
+        </p>
+      )}
+      <div className="section">
+        <h3>Description</h3>
+        {hasDescription ? (
+          issue.description ? (
+            <p className="gh-body">{issue.description}</p>
+          ) : (
+            <p className="note">No description.</p>
+          )
+        ) : (
+          <p className="note warn">{loadNote || 'Loading description…'}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
   setSettings,
@@ -624,6 +710,23 @@ function SettingsView({
         no push, pull, or merge from Halo yet.
       </p>
 
+      <h3>Linear</h3>
+      <label>
+        Team
+        <input
+          type="text"
+          value={settings.linear.team}
+          onChange={(e) => setSettings({ ...settings, linear: { ...settings.linear, team: e.target.value } })}
+          placeholder="xvoidsx"
+        />
+      </label>
+      <p className="note">
+        Issues come from the `linear` connector CLI (`call-tool list_issues` / `get_issue` / `list_comments`), so
+        the Linear connector must be connected — Halo never holds a token of its own, it rides the existing
+        connection. Read-only for now: the connector's first grant is read-only, and Halo only ever calls read
+        tools. Empty team means the whole workspace.
+      </p>
+
       <h3>Ollama — local-first</h3>
       <label>
         Base URL
@@ -743,13 +846,14 @@ export default function App() {
   // list carries intent only; the detail survives list refreshes
   // because it lives here, not in the list rows.
   const [trailDetails, setTrailDetails] = useState<Record<string, Trail>>({});
-  // The forge switcher: Entire (Trails) or GitHub (PRs + issues). One
-  // forge's list is visible at a time; the other keeps its selection.
-  // A UI preference, so it lives in localStorage like the sidebar
-  // width — not in settings.json.
-  const [forge, setForge] = useState<'entire' | 'github'>(() => {
+  // The forge switcher: Entire (Trails), GitHub (PRs + issues), or
+  // Linear (issues). One forge's list is visible at a time; the
+  // others keep their selections. A UI preference, so it lives in
+  // localStorage like the sidebar width — not in settings.json.
+  const [forge, setForge] = useState<'entire' | 'github' | 'linear'>(() => {
     try {
-      return window.localStorage.getItem('halo.forge') === 'github' ? 'github' : 'entire';
+      const saved = window.localStorage.getItem('halo.forge');
+      return saved === 'github' || saved === 'linear' ? saved : 'entire';
     } catch {
       return 'entire';
     }
@@ -770,6 +874,17 @@ export default function App() {
   const [ghDetailNote, setGhDetailNote] = useState('');
   const [selectedGhId, setSelectedGhId] = useState<string>('');
   const ghRef = useRef<{ prs: GitHubPR[]; issues: GitHubIssue[] }>({ prs: [], issues: [] });
+  // Linear issues, from the `linear` connector CLI (main reads the
+  // configured team from settings). Same shape as the GitHub side: a
+  // synchronous mirror for the detail effect, a detail note for the
+  // empty states, and per-issue details that survive the 30 s list
+  // refresh.
+  const [linIssues, setLinIssues] = useState<LinearIssue[]>([]);
+  const [linearDetail, setLinearDetail] = useState('');
+  const [linDetails, setLinDetails] = useState<Record<string, LinearIssueDetail>>({});
+  const [linDetailNote, setLinDetailNote] = useState('');
+  const [selectedLinId, setSelectedLinId] = useState<string>('');
+  const linRef = useRef<LinearIssue[]>([]);
   const [settings, setSettings] = useState<HaloSettings>(defaultSettings);
   const [herdr, setHerdr] = useState<HerdrState | null>(null);
   // Terminal panes are first-class: one shell by default, at home —
@@ -898,11 +1013,35 @@ export default function App() {
     setView('trail');
   }, []);
 
-  // Switching forges remembers the choice and refreshes the GitHub
-  // list when landing on it — a PR opened after launch still shows
+  // Linear issues come from the `linear` connector CLI (main reads
+  // the configured team from settings). Same 30 s cadence as trails
+  // and GitHub — the list call hits the Linear API over the network.
+  const refreshLinear = useCallback(() => {
+    if (!window.halo) return;
+    void window.halo.listLinear().then((res) => {
+      setLinIssues(res.issues);
+      linRef.current = res.issues;
+      setLinearDetail(res.detail);
+      setSelectedLinId((prev) => {
+        if (prev && res.issues.some((i) => i.id === prev)) return prev;
+        return res.issues[0]?.id ?? '';
+      });
+    });
+  }, []);
+
+  // Picking an issue switches to the detail view; the detail effect
+  // below fetches its full view via `get_issue` + `list_comments`.
+  const selectLin = useCallback((id: string) => {
+    setLinDetailNote('');
+    setSelectedLinId(id);
+    setView('trail');
+  }, []);
+
+  // Switching forges remembers the choice and refreshes the list
+  // when landing on it — an issue opened after launch still shows
   // up live.
   const switchForge = useCallback(
-    (next: 'entire' | 'github') => {
+    (next: 'entire' | 'github' | 'linear') => {
       setForge(next);
       try {
         window.localStorage.setItem('halo.forge', next);
@@ -910,8 +1049,9 @@ export default function App() {
         // Private mode or no storage — the switch still works.
       }
       if (next === 'github') refreshGitHub();
+      if (next === 'linear') refreshLinear();
     },
-    [refreshGitHub],
+    [refreshGitHub, refreshLinear],
   );
 
   useEffect(() => {
@@ -927,6 +1067,7 @@ export default function App() {
     }
     refreshTrails();
     refreshGitHub();
+    refreshLinear();
     void window.halo.getSettings().then(setSettings);
     refreshHerdr();
     // Live detection: herdr agents come and go — re-check while Halo is
@@ -934,12 +1075,14 @@ export default function App() {
     const timer = window.setInterval(refreshHerdr, 10000);
     const trailTimer = window.setInterval(refreshTrails, 30000);
     const ghTimer = window.setInterval(refreshGitHub, 30000);
+    const linTimer = window.setInterval(refreshLinear, 30000);
     return () => {
       window.clearInterval(timer);
       window.clearInterval(trailTimer);
       window.clearInterval(ghTimer);
+      window.clearInterval(linTimer);
     };
-  }, [refreshHerdr, refreshTrails, refreshGitHub]);
+  }, [refreshHerdr, refreshTrails, refreshGitHub, refreshLinear]);
 
   // The list carries intent only; the detail view comes from
   // `entire trail show`, fetched when a trail is picked (or on first
@@ -993,6 +1136,30 @@ export default function App() {
       cancelled = true;
     };
   }, [selectedGhId]);
+
+  // The list carries intent only; the detail view comes from
+  // `get_issue` + `list_comments`, fetched when an issue is picked
+  // (or on first load). It lands in the detail records, so the 30 s
+  // list refresh never clobbers a fuller issue with its thin list
+  // row — and never shows the list's truncated description as the
+  // real one.
+  useEffect(() => {
+    if (!selectedLinId || !window.halo) return;
+    let cancelled = false;
+    void window.halo.getLinearIssue(selectedLinId).then((res) => {
+      if (cancelled) return;
+      if (!res.issue) {
+        setLinDetailNote(res.detail);
+        return;
+      }
+      if (res.detail) setLinDetailNote(res.detail);
+      const full = res.issue;
+      setLinDetails((prev) => ({ ...prev, [full.id]: full }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLinId]);
 
   useEffect(() => {
     if (view === 'terminal') setTermMounted(true);
@@ -1348,6 +1515,18 @@ export default function App() {
     [selectedGhId, ghPRDetails, ghIssueDetails, prs, issues],
   );
 
+  // The selected Linear issue's fuller detail, when fetched — else
+  // the thin list row. The list row has no description (the list
+  // truncates it), so the detail view waits for `get_issue` instead
+  // of showing a cut-off paragraph.
+  const selectedLin = useMemo(
+    () =>
+      selectedLinId
+        ? (linDetails[selectedLinId] ?? linIssues.find((i) => i.id === selectedLinId))
+        : undefined,
+    [selectedLinId, linDetails, linIssues],
+  );
+
   // Dragging the sidebar's right edge resizes it. The width is
   // clamped live and saved when the drag ends, so it sticks.
   const onSidebarPointerDown = (e: React.PointerEvent) => {
@@ -1382,7 +1561,9 @@ export default function App() {
     view === 'trail'
       ? forge === 'github'
         ? (selectedGh?.title ?? 'GitHub')
-        : (selected?.title ?? 'Trails')
+        : forge === 'linear'
+          ? (selectedLin?.title ?? 'Linear')
+          : (selected?.title ?? 'Trails')
       : view === 'terminal'
         ? 'Terminal'
         : view === 'chat'
@@ -1423,6 +1604,14 @@ export default function App() {
               <GitHubMark size={18} />
               GitHub
             </button>
+            <button
+              className={`forge-btn ${forge === 'linear' ? 'active' : ''}`}
+              onClick={() => switchForge('linear')}
+              title="Linear — issues"
+            >
+              <LinearMark size={18} />
+              Linear
+            </button>
           </div>
           {forge === 'entire' && (
             <>
@@ -1440,6 +1629,29 @@ export default function App() {
                 <p className="note">{githubDetail || 'No PRs or issues yet.'}</p>
               )}
               {ghGroups.map((g) => renderGhGroup(g))}
+            </>
+          )}
+          {forge === 'linear' && (
+            <>
+              <h2>Issues</h2>
+              {linIssues.length === 0 && <p className="note">{linearDetail || 'No issues yet.'}</p>}
+              {linIssues.map((i) => (
+                <button
+                  key={i.id}
+                  className={`trail-row ${selectedLinId === i.id && view === 'trail' && forge === 'linear' ? 'active' : ''}`}
+                  onClick={() => selectLin(i.id)}
+                >
+                  <div className="t-title">
+                    {i.title}
+                    <span className={`pill ${LINEAR_PILL[i.statusType] ?? ''}`}>{i.status}</span>
+                  </div>
+                  <div className="t-meta">
+                    {[i.id, i.priority ? `${i.priority} priority` : '', i.assignee ? `→ ${i.assignee}` : '', i.labels.join(', ')]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                </button>
+              ))}
             </>
           )}
         </div>
@@ -1475,10 +1687,11 @@ export default function App() {
             onClick={() => {
               setView('trail');
               if (forge === 'github') refreshGitHub();
+              else if (forge === 'linear') refreshLinear();
               else refreshTrails();
             }}
           >
-            {forge === 'github' ? 'GitHub' : 'Trails'}
+            {forge === 'github' ? 'GitHub' : forge === 'linear' ? 'Linear' : 'Trails'}
           </button>
           <button
             className={`icon-btn ${view === 'terminal' ? 'active' : ''}`}
@@ -1507,6 +1720,10 @@ export default function App() {
           <GitHubIssueView issue={selectedGh} loadNote={ghDetailNote} />
         )}
         {view === 'trail' && forge === 'github' && !selectedGh && <GitHubEmpty detail={githubDetail} />}
+        {view === 'trail' && forge === 'linear' && selectedLin && (
+          <LinearIssueView issue={selectedLin} loadNote={linDetailNote} />
+        )}
+        {view === 'trail' && forge === 'linear' && !selectedLin && <LinearEmpty detail={linearDetail} />}
         {chatMounted && (
           <div className={`chat-view ${view === 'chat' ? '' : 'hidden'}`}>
             <ChatView

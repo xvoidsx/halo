@@ -266,6 +266,73 @@ export interface GitHubConfig {
   repos: string[];
 }
 
+/** A Linear issue, mapped from the `linear` connector CLI
+ * (`call-tool list_issues` / `get_issue`). Fields verified against
+ * real output (2026-11-12): id is the identifier ('XVOIDSX-71'),
+ * uuid is the UUID, status is the workflow name ('Backlog',
+ * 'Todo', 'In Progress', 'Done'), statusType is its bucket
+ * ('backlog' | 'unstarted' | 'started' | 'completed' |
+ * 'canceled'), priority is {value, name} (1 Urgent … 4 Low),
+ * labels are label names. The list truncates the description —
+ * the full text only comes from `get_issue`, so list rows never
+ * show a description. */
+export type LinearStatusType =
+  | 'backlog'
+  | 'unstarted'
+  | 'started'
+  | 'completed'
+  | 'canceled';
+
+export interface LinearComment {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface LinearIssue {
+  /** The identifier, e.g. 'XVOIDSX-71' — unique workspace-wide. */
+  id: string;
+  uuid: string;
+  title: string;
+  /** Workflow state name, e.g. 'Backlog'. */
+  status: string;
+  statusType: LinearStatusType;
+  /** Priority name, e.g. 'Low', or '' when unset. */
+  priority: string;
+  url: string;
+  labels: string[];
+  /** Assignee display name, or '' when unassigned. */
+  assignee: string;
+  createdBy: string;
+  team: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LinearIssueDetail extends LinearIssue {
+  /** Full description from `get_issue` (the list truncates it). */
+  description: string;
+  comments: LinearComment[];
+}
+
+export interface LinearListResult {
+  issues: LinearIssue[];
+  detail: string;
+}
+
+export interface LinearIssueDetailResult {
+  issue: LinearIssueDetail | null;
+  detail: string;
+}
+
+export interface LinearConfig {
+  /** Linear team for the issues list, e.g. 'xvoidsx'. The
+   * connector's `list_issues` takes a team filter; empty means
+   * the whole workspace. Default is the only team that exists. */
+  team: string;
+}
+
 export interface HaloSettings {
   repos: RepoEntry[];
   activeRepoId: string | null;
@@ -273,6 +340,7 @@ export interface HaloSettings {
   ollama: OllamaConfig;
   entire: EntireConfig;
   github: GitHubConfig;
+  linear: LinearConfig;
   terminal: TerminalConfig;
   byok: {
     openai: ProviderConfig;
@@ -296,6 +364,7 @@ export const defaultSettings: HaloSettings = {
   ollama: { baseUrl: 'http://127.0.0.1:11434', defaultModel: 'qwen3:8b' },
   entire: { projects: [] },
   github: { repos: [] },
+  linear: { team: 'xvoidsx' },
   terminal: { fontSize: 13 },
   byok: {
     openai: { apiKey: '', enabled: false },

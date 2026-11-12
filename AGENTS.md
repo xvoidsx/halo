@@ -558,6 +558,60 @@ what to build, where things live, and the lessons that apply here.
   keepalive, splits, chat-list — flaked once on attachRenders, passed
   on immediate re-run, the known timing flake — herdr-parser,
   herdr-e2e, pty-smoke, close ×2, close-busy).
+- **0.10.0 — Linear issues as a third forge (2026-11-12).** The
+  switcher grows to three buttons (Entire / GitHub / Linear) and
+  the Linear view lists issues from the `linear` connector CLI.
+  `electron/linearAdapter.ts` is the boundary: `runLinear` tries
+  `linear` on PATH, then the documented connector location
+  `/opt/hatch/bin/linear` (a packaged app's desktop-session PATH
+  may not include it); calls are `call-tool --name <tool>
+  --arguments-json '<json>'` (15 s timeout, ENOENT → code -1).
+  **The output is an MCP envelope, parsed TWICE:** outer JSON,
+  then `result.content[0].text` as a second JSON string
+  (`parseMcp`). `list_issues` → `{issues, hasNextPage}` (limit 50,
+  orderBy updatedAt, team filter when set); `get_issue` → the issue
+  object itself at top level; `list_comments` → `{comments}`.
+  **Trap:** the list TRUNCATES the description ("(truncated, use
+  `get_issue` for full description)") — the detail view must fetch
+  `get_issue` and never show the cut-off paragraph as the
+  description (the `'description' in issue` guard, same pattern as
+  GitHub's `'body' in pr`). Issue fields verified live against
+  Raven's workspace (50 issues, one team `xvoidsx`): id is the
+  identifier (`XVOIDSX-71`), status is the workflow name
+  (Backlog/Todo/In Progress/Done), statusType its bucket, priority
+  `{value, name}`, labels by name, assignee absent when unassigned
+  (defensive `personName`: string, or object `.name`). Comments
+  verified real on XVOIDSX-68 (2, from Linear + rav3ndust):
+  `{id, author: {id, name}, body, createdAt}`. Settings holds a
+  `linear.team` string (default `xvoidsx`; empty = whole workspace;
+  `normalizeLinear` falls back to the default on a stray type).
+  Read-only by construction: the connector's first grant is
+  read-only and Halo only calls read tools — no token held, it
+  rides the existing OAuth. **Logos:** Linear's brand page allows
+  the logomark for tight layouts/logo-only grids, monochrome,
+  unmodified, no endorsement implied — but unlike GitHub it has no
+  explicit "show integration" blessing, so the use stays strictly
+  inside their stated rules. The mark is the simpleicons tracing
+  (CC0, same as GitHub's). **Verification:** fake `linear` in
+  ~/workspace/.tmp/fakebin/linear serves REAL fixtures (list of 5,
+  get_issue 71 + 68, comments on 68) from
+  linear-fixtures/*.json — nothing synthesized; a non-xvoidsx team
+  lists empty; `scripts/linear-test.mjs` (8 checks: unknown team
+  note, three marks, 71 Backlog / 54 Done / 68 Todo pills, 71
+  detail with the real description + 0 comments + Linear link, 68
+  detail with its 2 real comments, Settings team field, back to
+  Entire). The github-test's switcher check had to grow with the
+  forge (2 → 3 buttons) — any test asserting the switcher count
+  must be updated when a forge joins. Full dev suite green on
+  0.10.0 (ui-smoke, settings, sidebar-shortcuts, trails, github,
+  linear, chat-layout, keepalive, splits, chat-list, herdr-parser,
+  herdr-e2e, pty-smoke, close, close-busy — close-busy raced the
+  app startup once, passed on immediate re-run). Tagline open:
+  Raven asked whether the sidebar's "herdr, trails, one live view"
+  should go (it describes the 0.7.0 app); options offered were
+  "your workspace, one live view" (Lain's pick — it can't go stale
+  when notes land), "agents, forges, one live view", "agents,
+  issues, one live view" — unpicked at pack time, left as-is.
 - **Rig spec correction (2026-11-12).** The intended herdr rig is
   THREE agents — fakepi on w1:p1, fakepi2, opencode-test — because
   chat-list-test requires a fakepi2 agent (it asserts row 2 and sends

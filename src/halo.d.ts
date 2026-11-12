@@ -6,6 +6,8 @@ import type {
   GitHubPRDetailResult,
   HaloSettings,
   HerdrState,
+  LinearIssueDetailResult,
+  LinearListResult,
   TermOpResult,
   TermSpawnResult,
   TrailDetailResult,
@@ -23,6 +25,8 @@ declare global {
       listGitHub: () => Promise<GitHubListResult>;
       getPR: (repo: string, number: number) => Promise<GitHubPRDetailResult>;
       getIssue: (repo: string, number: number) => Promise<GitHubIssueDetailResult>;
+      listLinear: () => Promise<LinearListResult>;
+      getLinearIssue: (id: string) => Promise<LinearIssueDetailResult>;
       herdrStatus: () => Promise<HerdrState>;
       watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
       agentSend: (paneId: string, text: string) => Promise<AgentSendResult>;

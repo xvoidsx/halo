@@ -6,7 +6,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { EntireConfig, GitHubConfig, HaloSettings } from '../src/types.js';
+import type { EntireConfig, GitHubConfig, HaloSettings, LinearConfig } from '../src/types.js';
 import { defaultSettings } from '../src/types.js';
 
 const DIR = path.join(os.homedir(), '.config', 'halo');
@@ -35,6 +35,15 @@ function normalizeEntire(raw: unknown): EntireConfig {
   return { projects: [] };
 }
 
+/** The Linear section holds a single `team` string (the team key
+ * or name, e.g. 'xvoidsx'). A stray type falls back to the default
+ * team — never a crash, never an invented filter. */
+function normalizeLinear(raw: unknown): LinearConfig {
+  const rec = (typeof raw === 'object' && raw !== null ? raw : {}) as { team?: unknown };
+  if (typeof rec.team === 'string' && rec.team.trim()) return { team: rec.team.trim() };
+  return { team: 'xvoidsx' };
+}
+
 /** The GitHub section holds a `repos` list of owner/repo slugs.
  * Anything else in the slot (a stray string, a null) falls back to
  * the empty list — never a crash, never invented repos. */
@@ -60,6 +69,7 @@ export function loadSettings(): HaloSettings {
       ollama: { ...defaultSettings.ollama, ...(parsed.ollama ?? {}) },
       entire: normalizeEntire(parsed.entire),
       github: normalizeGitHub(parsed.github),
+      linear: normalizeLinear(parsed.linear),
       terminal: { ...defaultSettings.terminal, ...(parsed.terminal ?? {}) },
       byok: {
         openai: { ...defaultSettings.byok.openai, ...(parsed.byok?.openai ?? {}) },

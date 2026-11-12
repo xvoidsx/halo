@@ -8,6 +8,8 @@ import type {
   GitHubPRDetailResult,
   HaloSettings,
   HerdrState,
+  LinearIssueDetailResult,
+  LinearListResult,
   TermOpResult,
   TermSpawnResult,
   TrailDetailResult,
@@ -30,6 +32,9 @@ contextBridge.exposeInMainWorld('halo', {
     ipcRenderer.invoke('halo:getPR', repo, number),
   getIssue: (repo: string, number: number): Promise<GitHubIssueDetailResult> =>
     ipcRenderer.invoke('halo:getIssue', repo, number),
+  listLinear: (): Promise<LinearListResult> => ipcRenderer.invoke('halo:listLinear'),
+  getLinearIssue: (id: string): Promise<LinearIssueDetailResult> =>
+    ipcRenderer.invoke('halo:getLinearIssue', id),
   herdrStatus: (): Promise<HerdrState> => ipcRenderer.invoke('halo:herdrStatus'),
   watchTrail: (id: string): Promise<{ status: string; todo: string }> =>
     ipcRenderer.invoke('halo:watchTrail', id),

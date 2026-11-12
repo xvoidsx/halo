@@ -64,10 +64,10 @@ no fake replies, ever.
   restarts.
 - The **Agents** switcher shows live agents with status lights and jumps
   to the selected agent's chat. Below it, the **forge switcher** flips
-  the list between Entire (Trails) and GitHub (pull requests + issues)
-  — the vendors' own marks, shown unmodified as platform indicators,
-  one forge's list at a time. The footer shows herdr's status (click ↻
-  to refresh).
+  the list between Entire (Trails), GitHub (pull requests + issues),
+  and Linear (issues) — the vendors' own marks, shown unmodified as
+  platform indicators, one forge's list at a time. The footer shows
+  herdr's status (click ↻ to refresh).
 
 ### Trails
 
@@ -100,6 +100,20 @@ no fake replies, ever.
   read-only view proves itself. The `gh` CLI must be installed and
   logged in; Halo never holds a token of its own.
 
+### Linear
+
+- Live from the `linear` connector CLI. Set the team in Settings →
+  Linear (default `xvoidsx`; empty means the whole workspace) and the
+  list fills from `linear call-tool list_issues`, refreshing every
+  30 s. Rows carry the workflow status (Backlog / Todo / In Progress /
+  Done …) and the priority; click a row for the detail (`get_issue` +
+  `list_comments`): the full description — the list truncates it, so
+  the detail is fetched, never the cut-off paragraph — the comments
+  with their authors, and a link out to Linear. Read-only: the
+  connector's first grant is read-only, and Halo only ever calls read
+  tools. Halo never holds a Linear token; it rides the connector's
+  existing OAuth connection.
+
 ### Settings
 
 - Settings live at `~/.config/halo/settings.json` (0600): repos, active
@@ -127,6 +141,16 @@ no fake replies, ever.
   one. The gh side is verified against a fixture transcribed from a
   screenshot so far; the real `gh/rav3ndust` JSON is still to be
   checked.
+- Linear verified against the real connector output (2026-11-12):
+  `list_issues` returns `{issues, hasNextPage}` with the identifier
+  (`XVOIDSX-71`), status + statusType, priority `{value, name}`,
+  labels, team; `get_issue` returns the issue object itself with the
+  FULL description; `list_comments` returns `{comments}` with
+  `author: {id, name}` + body (real comments on XVOIDSX-68, from
+  Linear + rav3ndust). The `linear` CLI prints an MCP envelope —
+  outer JSON, then `result.content[0].text` as a second JSON string —
+  so the adapter parses twice. 50 issues in the workspace, one team
+  (`xvoidsx`).
 - GitHub verified against the real `gh` 2.102.0 `--help` (JSON FIELDS
   lists) and real `git status --porcelain=v2 --branch` output: PRs
   carry `reviewDecision` + `statusCheckRollup` (any failure verdict
@@ -172,9 +196,14 @@ no fake replies, ever.
 
 ## Next steps
 
-1. Bench the 0.9.0 GitHub build: the forge switcher, PRs + issues
-   against the live repos, branch status, and the close dialog.
+1. Bench the 0.10.0 Linear build: the third forge button, the real
+   issues against the live workspace, the detail + comments, and the
+   close dialog.
 2. Show it off in the Entire Discord after watching a Trail run.
-3. Ollama wiring (local-first default model) + BYOK provider calls.
-4. Horizontal splits (split-tree model).
-5. Bench on Cloudbook / T440p.
+3. Notes section — the hub's fourth view. Obsidian first (the vault
+   is markdown on disk, local-first, already Raven's brain),
+   Notion second (the shared notebooks with Ryoko).
+4. Push / pull from Halo, after the read-only GitHub view proves itself.
+5. Ollama wiring (local-first default model) + BYOK provider calls.
+6. Horizontal splits (split-tree model).
+7. Bench on Cloudbook / T440p.

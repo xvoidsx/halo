@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, settingsPath } from './settingsFile.js';
 import { getIssue, getPR, listGitHub } from './githubAdapter.js';
+import { getLinearIssue, listLinear } from './linearAdapter.js';
 import { detectHerdr, getTrail, listTrails, readAgentOutput, sendAgentMessage, watchTrail } from './herdrAdapter.js';
 import { TerminalManager } from './terminal.js';
 import type { HaloSettings } from '../src/types.js';
@@ -115,6 +116,12 @@ app.whenReady().then(() => {
   ipcMain.handle('halo:listGitHub', () => listGitHub(loadSettings().github.repos, loadSettings().repos));
   ipcMain.handle('halo:getPR', (_e, repo: string, number: number) => getPR((repo ?? '').trim(), number));
   ipcMain.handle('halo:getIssue', (_e, repo: string, number: number) => getIssue((repo ?? '').trim(), number));
+
+  // Linear: issues + comments, from the `linear` connector CLI (see
+  // linearAdapter.ts). Read-only — the connector's first grant is
+  // read-only, and Halo only ever calls read tools.
+  ipcMain.handle('halo:listLinear', () => listLinear(loadSettings().linear.team));
+  ipcMain.handle('halo:getLinearIssue', (_e, id: string) => getLinearIssue((id ?? '').trim()));
 
   // Herdr: real detection via the herdr CLI; trail watching is a stub
   // until `entire trail watch --json` streaming lands.
