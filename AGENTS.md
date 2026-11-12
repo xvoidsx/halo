@@ -263,9 +263,12 @@ what to build, where things live, and the lessons that apply here.
 - **Killing Electron from a shell: never pattern-match your own command
   line.** `pkill -f "[e]lectron"` is flaky here — the bracket trick
   fails when the tool wraps the command, and one bad kill SIGKILLs your
-  own shell (seen 2026-11-11, 0.4.0). Reliable method: scan /proc with
-  the pattern held in a variable built from split quotes so the literal
-  never appears contiguously in your argv:
+  own shell (seen 2026-11-11, 0.4.0). `pkill -f` with ANY pattern is
+  unsafe: it matches the pattern text in your own shell's argv too
+  (0.5.0 cleanup: `pkill -f "Xvfb :"` SIGTERMed the shell that ran it).
+  Reliable method: scan /proc with the pattern held in a variable built
+  from split quotes so the literal never appears contiguously in your
+  argv:
   `pat="/opt/Ha""lo"; pat2="/usr/bin/ha""lo"; for p in /proc/[0-9]*; do
   c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); case "$c" in
   *"$pat"*|*"$pat2"*) kill -9 ${p#/proc/};; esac; done`. This catches
