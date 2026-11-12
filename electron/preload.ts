@@ -22,6 +22,8 @@ import type {
   ToolId,
   TrailDetailResult,
   TrailListResult,
+  TrailWatchEvent,
+  TrailWatchStatus,
 } from '../src/types.js';
 
 // Minimal, typed bridge. The renderer never touches Node or Electron
@@ -44,8 +46,22 @@ contextBridge.exposeInMainWorld('halo', {
   getLinearIssue: (id: string): Promise<LinearIssueDetailResult> =>
     ipcRenderer.invoke('halo:getLinearIssue', id),
   herdrStatus: (): Promise<HerdrState> => ipcRenderer.invoke('halo:herdrStatus'),
-  watchTrail: (id: string): Promise<{ status: string; todo: string }> =>
-    ipcRenderer.invoke('halo:watchTrail', id),
+  startTrailWatch: (): Promise<TrailWatchStatus> => ipcRenderer.invoke('halo:startTrailWatch'),
+  stopTrailWatch: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('halo:stopTrailWatch'),
+  onTrailEvent: (cb: (ev: TrailWatchEvent) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: TrailWatchEvent) => cb(payload);
+    ipcRenderer.on('halo:trail-event', listener);
+    return () => {
+      ipcRenderer.removeListener('halo:trail-event', listener);
+    };
+  },
+  onTrailWatchStatus: (cb: (status: TrailWatchStatus) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, payload: TrailWatchStatus) => cb(payload);
+    ipcRenderer.on('halo:trail-watch-status', listener);
+    return () => {
+      ipcRenderer.removeListener('halo:trail-watch-status', listener);
+    };
+  },
 
   // Spawning agents from the Agents dropdown.
   getSpawnableAgents: (): Promise<{ kinds: SpawnableAgent[]; defaultKind: string }> =>

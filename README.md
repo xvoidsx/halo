@@ -248,7 +248,26 @@ no fake replies, ever.
   fully at 68 cols; the nested herdr TUI squeezes opencode's
   sub-pane (clipped UI at full width, segfault at split width) —
   herdr-side, and the mitigations (per-pane zoom, pane maximize)
-  are the next version's QoL round.
+  shipped in 0.13.0.
+- QoL round (0.13.0, 2026-11-12): per-pane font zoom (Ctrl+=/−,
+  Ctrl+0 resets, amber +Npx badge on the pane), pane maximize
+  (Ctrl+Shift+M, one pane takes the row, dividers hide), terminal
+  layout persistence (panes + commands restore across restarts,
+  sign-in panes excluded so a login never re-runs), Ctrl+K quick
+  switcher (trails / PRs / issues / agents / notes, ranked by
+  match), unread dots on the forge buttons (something new since you
+  last looked — cleared by looking), live trails (`entire trail
+  watch --json` streams events, ● live badge in the Trails
+  heading, 30 s poll stays as backstop), in-pane find (Ctrl+F,
+  ↑/↓, no-match state) + copy selection (Ctrl+Shift+C), and
+  herdr-restart detection (the server going away and coming back
+  offers Reconnect all with the restart named — the banner appears
+  even when the dead chat attach already came back on its own).
+  The watch event shapes are still assumed from the docs (the
+  adapter never reads event fields — any parseable line refreshes
+  the list), and the restart banner's "something died" memory is a
+  latch: a dead chat attach unmounts when the agent list empties,
+  so the latch is taken while the server is still down.
 - No placeholder data anywhere. An empty trail list means no trail has run
   yet — the app never shows a trail that didn't happen.
 - No telemetry anywhere. Local-first by construction.

@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 
@@ -53,6 +54,9 @@ export default function TerminalPanel({
   onClose,
   style,
   fontSize,
+  zoom,
+  searchSignal,
+  copySignal,
   onAttachState,
   onExitState,
   reconnectSignal,
@@ -68,6 +72,16 @@ export default function TerminalPanel({
    * live terminal (no re-spawn) — the option is set on the running
    * Terminal and the pane is re-fit. Defaults to 13 when unset. */
   fontSize?: number;
+  /** Per-pane zoom in px (0.13.0): added to fontSize by the parent.
+   * Shown as a badge in the pane bar so a zoomed pane says so. */
+  zoom?: number;
+  /** Bumps when the parent wants this pane's search bar opened
+   * (Ctrl+F). The panel opens the bar and focuses its input. */
+  searchSignal?: { paneId: string; nonce: number } | null;
+  /** Bumps when the parent wants this pane's selection copied
+   * (Ctrl+Shift+C, or the context menu). The panel copies its own
+   * selection — the parent never reaches into the terminal. */
+  copySignal?: { paneId: string; nonce: number } | null;
   /** Tells the parent when this pane is attached to a herdr agent's
    * pane — a pane with a live attach must not be `agent read` at the
    * same time (the read kills the attach; see below). */
@@ -93,8 +107,18 @@ export default function TerminalPanel({
   // The FitAddon lives inside the spawn effect; the font-size effect
   // re-fits through this ref so a size change reflows the live pane.
   const fitRef = useRef<(() => void) | null>(null);
+  // The SearchAddon lives beside it — the search bar (below) finds
+  // through this ref, never by reaching into the terminal.
+  const searchRef = useRef<SearchAddon | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState('Starting terminal…');
   const [failed, setFailed] = useState('');
+  // In-pane find (Ctrl+F): a bar under the pane bar with the query,
+  // prev/next, and a found/missing state. Closed by Esc or ✕, which
+  // hands focus back to the terminal.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFound, setSearchFound] = useState<boolean | null>(null);
   // When the shell exits, the pane offers a way back instead of a dead
   // end: Reconnect re-spawns the same command in a fresh terminal.
   const [deadCode, setDeadCode] = useState<number | null>(null);
@@ -143,6 +167,9 @@ export default function TerminalPanel({
     host.addEventListener('focusin', onHostFocusIn);
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const search = new SearchAddon();
+    term.loadAddon(search);
+    searchRef.current = search;
     term.open(host);
     let webgl: WebglAddon | null = null;
     try {
@@ -286,6 +313,12 @@ export default function TerminalPanel({
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       if (termId) void window.halo?.termKill(termId);
       termRef.current = null;
+      searchRef.current = null;
+      try {
+        search.dispose();
+      } catch {
+        // Already gone.
+      }
       try {
         webgl?.dispose();
       } catch {
@@ -315,6 +348,48 @@ export default function TerminalPanel({
     }
   }, [fontSize]);
 
+  // Ctrl+F from the parent: open the search bar for THIS pane only.
+  // The signal carries the target pane id, so a search request never
+  // opens the bar in every pane at once.
+  useEffect(() => {
+    if (searchSignal && searchSignal.paneId === pane.id && searchSignal.nonce > 0) {
+      setSearchOpen(true);
+    }
+  }, [searchSignal, pane.id]);
+
+  // Focus the search input when the bar opens, so the user types
+  // straight into it.
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+
+  // Copy from the parent (Ctrl+Shift+C, or the context menu): this
+  // pane copies its own selection to the clipboard. An empty
+  // selection copies nothing.
+  useEffect(() => {
+    if (!copySignal || copySignal.paneId !== pane.id || copySignal.nonce === 0) return;
+    const sel = termRef.current?.getSelection() ?? '';
+    if (sel) {
+      void navigator.clipboard?.writeText(sel).catch(() => {
+        // Clipboard unavailable — the selection just stays selected.
+      });
+    }
+  }, [copySignal, pane.id]);
+
+  const runSearch = (direction: 'next' | 'prev') => {
+    const addon = searchRef.current;
+    if (!addon || !searchQuery) return;
+    const found = direction === 'next' ? addon.findNext(searchQuery) : addon.findPrevious(searchQuery);
+    setSearchFound(found);
+  };
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSearchFound(null);
+    termRef.current?.focus();
+  };
+
   // "Reconnect all" from the parent: re-spawn this pane, but only if
   // it is actually dead. The effect runs only when the signal changes,
   // so a pane that dies later does not auto-reconnect — the button is
@@ -341,6 +416,11 @@ export default function TerminalPanel({
         <span className="t-repo">{pane.title}</span>
         <span className="t-path">{pane.cwd || 'home'}</span>
         {status && <span className="t-status">{status}</span>}
+        {zoom !== undefined && zoom !== 0 && (
+          <span className="t-zoom" title="Pane zoom — Ctrl+0 resets it">
+            {zoom > 0 ? `+${zoom}` : zoom}px
+          </span>
+        )}
         {deadCode !== null && (
           <button
             className="t-reconnect"
@@ -361,6 +441,49 @@ export default function TerminalPanel({
           </button>
         )}
       </div>
+      {searchOpen && (
+        <div className="term-search">
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            placeholder="Find in this pane…"
+            aria-label="Find in this pane"
+            className={searchFound === false ? 'no-match' : ''}
+            onChange={(e) => {
+              const q = e.target.value;
+              setSearchQuery(q);
+              if (!q) {
+                setSearchFound(null);
+                return;
+              }
+              const addon = searchRef.current;
+              if (addon) setSearchFound(addon.findNext(q));
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                closeSearch();
+              } else if (e.key === 'Enter') {
+                e.preventDefault();
+                runSearch(e.shiftKey ? 'prev' : 'next');
+              }
+            }}
+          />
+          <button title="Previous match (Shift+Enter)" onClick={() => runSearch('prev')}>
+            ↑
+          </button>
+          <button title="Next match (Enter)" onClick={() => runSearch('next')}>
+            ↓
+          </button>
+          <span className="term-search-state">
+            {searchFound === false ? 'no match' : searchFound === true ? 'found' : ''}
+          </span>
+          <button title="Close find (Esc)" onClick={closeSearch}>
+            ✕
+          </button>
+        </div>
+      )}
       {failed ? (
         <div className="terminal-failed">
           <p className="empty">Terminal is not available.</p>

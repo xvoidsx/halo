@@ -129,7 +129,11 @@ check('mirrored trail appears in the sidebar', ghSeen === true, `got ${ghSeen}`)
 const headings = await evalJs(`[...document.querySelectorAll('.trail-list h2')].map((el) => el.textContent)`);
 check(
   'Trails and GitHub are separate sections',
-  Array.isArray(headings) && headings.includes('Trails') && headings.includes('GitHub'),
+  Array.isArray(headings) &&
+    // The Trails h2 carries the live badge when the watch is
+    // connected ("Trails ● live"), so match the heading's start.
+    headings.some((h) => h.trim().startsWith('Trails')) &&
+    headings.includes('GitHub'),
   `got ${JSON.stringify(headings)}`,
 );
 // The gh group must sit after the GitHub heading in the DOM — under

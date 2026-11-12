@@ -20,6 +20,8 @@ import type {
   ToolId,
   TrailDetailResult,
   TrailListResult,
+  TrailWatchEvent,
+  TrailWatchStatus,
 } from './types';
 
 declare global {
@@ -36,7 +38,10 @@ declare global {
       listLinear: () => Promise<LinearListResult>;
       getLinearIssue: (id: string) => Promise<LinearIssueDetailResult>;
       herdrStatus: () => Promise<HerdrState>;
-      watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
+      startTrailWatch: () => Promise<TrailWatchStatus>;
+      stopTrailWatch: () => Promise<{ ok: boolean }>;
+      onTrailEvent: (cb: (ev: TrailWatchEvent) => void) => () => void;
+      onTrailWatchStatus: (cb: (status: TrailWatchStatus) => void) => () => void;
       getSpawnableAgents: () => Promise<{ kinds: SpawnableAgent[]; defaultKind: string }>;
       spawnAgent: (kind: string) => Promise<SpawnResult>;
       getConnections: () => Promise<ConnectionStatus[]>;

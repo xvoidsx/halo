@@ -22,7 +22,8 @@
 //     stays inside the sidebar and the switcher never scrolls
 //     sideways; same no-scroll check at the 280px default.
 //  7. The Terminal hint bar wraps (no mid-shortcut clip) and
-//     shows its three kbd shortcut chips.
+//     shows its kbd shortcut chips (split first, maximize + find
+//     among them since 0.13.0).
 //
 // Usage: node scripts/connections-test.mjs [port]
 import * as fs from 'node:fs';
@@ -249,8 +250,13 @@ const hint = await evalJs(
 check(
   'terminal hint wraps instead of clipping and shows its shortcut chips',
   Array.isArray(hint?.kbds) &&
-    hint.kbds.length === 3 &&
+    // 0.13.0 grew the hint (maximize, zoom, find joined split/close/
+    // focus-move), so the count is a floor, not exact — but the first
+    // chip is still Ctrl+Shift+D and the new ones are named.
+    hint.kbds.length >= 3 &&
     hint.kbds[0].includes('Ctrl+Shift+D') &&
+    hint.kbds.some((k) => k.includes('Ctrl+Shift+M')) &&
+    hint.kbds.some((k) => k.includes('Ctrl+F')) &&
     hint.scrolls === false &&
     hint.height > 20,
   `got ${JSON.stringify(hint)}`,

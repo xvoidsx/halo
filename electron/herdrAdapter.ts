@@ -37,10 +37,14 @@
 // a GitHub mirror. The mapping below is docs-grounded and defensive —
 // field names get tightened against a real `--json` paste (Raven's
 // trails-test run, 2026-11-12).
-// - watchTrail(): stream live trail events into the renderer via
-//   `entire trail watch --json` — not built yet.
+// - startTrailWatch(): one long-running `entire trail watch
+//   --project <project> --json` per configured project, streaming
+//   live events into the renderer (0.13.0). The exact event shapes
+//   are not verified against a real CLI yet, so the adapter never
+//   reads event fields — any parseable line is "something changed"
+//   and the renderer refreshes the list.
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -230,9 +234,124 @@ export async function listHerdrAgents(): Promise<HerdrState> {
 // fake numbers. The list carries intent (title, status); eval scores,
 // findings and runs arrive only when their own CLI surfaces are wired.
 
-export interface NotImplemented {
-  status: 'not-implemented';
-  todo: string;
+/** Live trail streaming: one long-running `entire trail watch
+ * --project <project> --json` per configured project.
+ *
+ * The CLI streams one JSON object per line (docs: events
+ * ready/<event_type>/reconnect/forbidden/error, auto-reconnect).
+ * The exact event shapes are NOT verified against a real CLI yet,
+ * so the adapter never reads event fields — any parseable line is
+ * forwarded as "something changed" and the renderer refreshes the
+ * list. Unparseable lines are ignored. A watch that exits (bad
+ * login, unknown flag) reports through onStatus and the 30 s poll
+ * keeps the list alive — a failed watch is a quiet fallback, never
+ * a broken Trails view. */
+export type TrailWatchHandler = (ev: { project: string; event: string }) => void;
+export type TrailWatchStatusHandler = (status: { ok: boolean; detail: string }) => void;
+
+const watchProcs = new Map<string, ChildProcess>();
+let watchHandler: TrailWatchHandler | null = null;
+let watchStatusHandler: TrailWatchStatusHandler | null = null;
+
+export function startTrailWatch(
+  projects: string[],
+  onEvent: TrailWatchHandler,
+  onStatus: TrailWatchStatusHandler,
+): { ok: boolean; detail: string } {
+  stopTrailWatch();
+  watchHandler = onEvent;
+  watchStatusHandler = onStatus;
+  const list = (projects ?? []).map((p) => p.trim()).filter(Boolean);
+  if (list.length === 0) {
+    return { ok: false, detail: 'No Entire project configured — set it in Settings → Entire Trails.' };
+  }
+  let started = 0;
+  for (const project of list) {
+    let buffer = '';
+    let stderrFirst = '';
+    let child: ChildProcess;
+    try {
+      child = spawn('entire', ['trail', 'watch', '--project', project, '--json']);
+    } catch {
+      onStatus({ ok: false, detail: `Could not start the trail watch for ${project}.` });
+      continue;
+    }
+    child.stdout?.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      let idx = buffer.indexOf('\n');
+      while (idx !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        idx = buffer.indexOf('\n');
+        if (!line) continue;
+        try {
+          JSON.parse(line);
+        } catch {
+          continue; // Not a JSON event — ignore, never crash the stream.
+        }
+        watchHandler?.({ project, event: line });
+      }
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (!stderrFirst) stderrFirst = chunk.toString('utf8').trim().slice(0, 200);
+    });
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      watchProcs.delete(project);
+      const detail =
+        err.code === 'ENOENT'
+          ? 'entire CLI not found on PATH — install it and run `entire login`.'
+          : `Trail watch for ${project} failed to start: ${err.message}`;
+      onStatus({ ok: false, detail });
+    });
+    child.on('close', (code) => {
+      watchProcs.delete(project);
+      if (code !== 0 && code !== null) {
+        const why = stderrFirst ? ` — ${stderrFirst}` : '';
+        onStatus({
+          ok: false,
+          detail: `Trail watch for ${project} exited (code ${code})${why} — the 30 s list refresh keeps running.`,
+        });
+      }
+    });
+    watchProcs.set(project, child);
+    started += 1;
+  }
+  if (started === 0) {
+    return { ok: false, detail: 'Could not start the trail watch.' };
+  }
+  return { ok: true, detail: `Watching ${started} project${started === 1 ? '' : 's'} live.` };
+}
+
+/** Stop every watch process. Called when the projects change, when
+ * the renderer asks, and when Halo quits — no watch outlives Halo. */
+export function stopTrailWatch(): void {
+  for (const [, child] of watchProcs) {
+    try {
+      child.kill();
+      // A child that ignores SIGTERM (a shell waiting on a long
+      // sleep, a hung CLI) still holds every fd it inherited from
+      // main — including the DevTools listen socket, which keeps
+      // port 9222 bound after the app quits. SIGKILL after a short
+      // grace period so a stuck watch can never outlive the app.
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }, 2000);
+      timer.unref?.();
+    } catch {
+      // Already gone.
+    }
+  }
+  watchProcs.clear();
+  watchHandler = null;
+  watchStatusHandler = null;
+}
+
+export function trailWatchActive(): boolean {
+  return watchProcs.size > 0;
 }
 
 /** `entire trail list` hits the Entire API over the network — give it
@@ -447,16 +566,6 @@ export async function getTrail(id: string, project: string): Promise<TrailDetail
   const trail = mapTrailDetail(parsed, id, project);
   if (!trail) return { trail: null, detail: 'Unrecognized `entire trail show --json` shape.' };
   return { trail, detail: '' };
-}
-
-/** TODO: stream live trail events into the renderer via
- * `entire trail watch --json` (one JSON line per event, auto-reconnect).
- * The list + detail above are the first pass; watch is the live tail. */
-export async function watchTrail(_trailId: string): Promise<NotImplemented> {
-  return {
-    status: 'not-implemented',
-    todo: 'watchTrail(): live trail event streaming is not built yet — `entire trail watch --json` is the source when it lands.',
-  };
 }
 
 // --- Agent chat: prompt + read, by pane_id only. --------------------------

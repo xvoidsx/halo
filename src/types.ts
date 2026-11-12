@@ -93,6 +93,27 @@ export interface TrailDetailResult {
   detail: string;
 }
 
+/** Result of starting the live trail watch (`entire trail watch
+ * --json`, one long-running process per project). `ok` is false
+ * when the watch could not start (no `entire` binary, no project,
+ * login missing) — the 30 s list poll keeps working, so a failed
+ * watch is a quiet fallback, never a broken Trails view. */
+export interface TrailWatchStatus {
+  ok: boolean;
+  detail: string;
+}
+
+/** One event off the watch stream, forwarded to the renderer. The
+ * event body is deliberately untyped — the watch's JSON shapes are
+ * not verified against a real CLI yet, so the renderer treats ANY
+ * event as "something changed, refresh the list" and never reads
+ * fields it has not seen. `project` is the project the stream
+ * belongs to. */
+export interface TrailWatchEvent {
+  project: string;
+  event: string;
+}
+
 export type AgentStatus = 'running' | 'idle' | 'not-detected' | 'error';
 
 export interface HerdrAgent {

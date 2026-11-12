@@ -96,6 +96,9 @@ export default function ChatView({
   onExitState,
   reconnectSignal,
   fontSize,
+  chatZoom,
+  searchSignal,
+  copySignal,
 }: {
   herdr: HerdrState | null;
   activePaneId: string | null;
@@ -111,6 +114,13 @@ export default function ChatView({
   reconnectSignal: number;
   /** Terminal font size (px) — from Settings, shared with the Terminal tab. */
   fontSize: number;
+  /** Per-pane zoom for the attach pane (0.13.0) — the parent already
+   * folded it into fontSize for the Terminal tab; here it is the
+   * badge value for the attach pane. */
+  chatZoom?: number;
+  /** Ctrl+F / Ctrl+Shift+C signals, forwarded to the attach pane. */
+  searchSignal?: { paneId: string; nonce: number } | null;
+  copySignal?: { paneId: string; nonce: number } | null;
 }) {
   const agents = herdr?.agents ?? [];
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
@@ -287,6 +297,9 @@ export default function ChatView({
                 command: `herdr agent attach ${selected.paneId}`,
               }}
               fontSize={fontSize}
+              zoom={chatZoom}
+              searchSignal={searchSignal}
+              copySignal={copySignal}
               onAttachState={onAttachState}
               onExitState={onExitState}
               reconnectSignal={reconnectSignal}

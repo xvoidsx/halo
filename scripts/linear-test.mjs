@@ -180,7 +180,7 @@ await sleep(800);
 const backOnEntire = await evalJs(`(() => {
   const btn = [...document.querySelectorAll('.forge-btn')].find((b) => b.textContent.trim() === 'Entire');
   const h2 = [...document.querySelectorAll('.trail-list h2')].map((el) => el.textContent);
-  return btn?.classList.contains('active') && h2.includes('Trails');
+  return btn?.classList.contains('active') && h2.some((t) => t.trim().startsWith('Trails'));
 })()`);
 check('switching back to Entire restores the Trails view', backOnEntire === true, `got ${backOnEntire}`);
 

@@ -13,7 +13,8 @@ import {
   readAgentOutput,
   sendAgentMessage,
   spawnAgent,
-  watchTrail,
+  startTrailWatch,
+  stopTrailWatch,
 } from './herdrAdapter.js';
 import { createNote, getNote, listNotes, listNotionDatabases } from './notesAdapter.js';
 import { TerminalManager } from './terminal.js';
@@ -156,10 +157,23 @@ app.whenReady().then(() => {
   );
   ipcMain.handle('halo:listNotionDatabases', () => listNotionDatabases(loadSettings().notes));
 
-  // Herdr: real detection via the herdr CLI; trail watching is a stub
-  // until `entire trail watch --json` streaming lands.
+  // Herdr: real detection via the herdr CLI. Live trail streaming
+  // runs one `entire trail watch --json` per configured project and
+  // forwards events to the renderer, which refreshes the list — the
+  // 30 s poll stays as the backstop, so a failed watch is a quiet
+  // fallback, never a broken Trails view.
   ipcMain.handle('halo:herdrStatus', () => detectHerdr());
-  ipcMain.handle('halo:watchTrail', (_e, id: string) => watchTrail(id));
+  ipcMain.handle('halo:startTrailWatch', () =>
+    startTrailWatch(
+      loadSettings().entire.projects,
+      (ev) => sendToRenderer('halo:trail-event', ev),
+      (status) => sendToRenderer('halo:trail-watch-status', status),
+    ),
+  );
+  ipcMain.handle('halo:stopTrailWatch', () => {
+    stopTrailWatch();
+    return { ok: true };
+  });
 
   // Spawning: the Agents dropdown offers the herdr kinds navi ships
   // (see herdrAdapter.ts) and starts one in a fresh pane.
@@ -178,8 +192,11 @@ app.whenReady().then(() => {
     readAgentOutput(paneId, lines ?? 120),
   );
 
-  // No shell outlives Halo.
-  app.on('before-quit', () => termManager.killAll());
+  // No shell outlives Halo — and no watch process either.
+  app.on('before-quit', () => {
+    termManager.killAll();
+    stopTrailWatch();
+  });
 
   createWindow(termManager);
   console.log('[halo] ready — dev server:', isDev ? process.env.VITE_DEV_SERVER_URL : '(built dist)');

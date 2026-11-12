@@ -1226,6 +1226,43 @@ function SettingsView({
   );
 }
 
+/** Saved terminal layout (0.13.0): panes + split shares, in
+ * localStorage — a UI preference, not settings.json. Validated on
+ * load; anything malformed falls back to one shell pane. */
+function loadTermLayout(): { panes: TermPane[]; sizes: number[] } | null {
+  try {
+    const raw = window.localStorage.getItem('halo.termLayout');
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const rec = parsed as Record<string, unknown>;
+    if (!Array.isArray(rec.panes) || !Array.isArray(rec.sizes)) return null;
+    if (rec.panes.length === 0 || rec.panes.length !== rec.sizes.length) return null;
+    const panes: TermPane[] = [];
+    for (const p of rec.panes) {
+      if (typeof p !== 'object' || p === null) return null;
+      const r = p as Record<string, unknown>;
+      if (typeof r.id !== 'string' || !r.id || typeof r.title !== 'string') return null;
+      if (typeof r.cwd !== 'string') return null;
+      if (r.command !== undefined && typeof r.command !== 'string') return null;
+      panes.push({
+        id: r.id,
+        title: r.title,
+        cwd: r.cwd,
+        command: r.command as string | undefined,
+      });
+    }
+    const sizes = (rec.sizes as unknown[]).map((s) =>
+      typeof s === 'number' && Number.isFinite(s) && s > 0 ? s : Number.NaN,
+    );
+    if (sizes.some((s) => Number.isNaN(s))) return null;
+    const total = sizes.reduce((a, b) => a + b, 0);
+    return { panes, sizes: sizes.map((s) => s / total) };
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const [view, setView] = useState<View>('trail');
   const [trails, setTrails] = useState<Trail[]>([]);
@@ -1301,7 +1338,13 @@ export default function App() {
   // Terminal panes are first-class: one shell by default, at home —
   // no repo required. Split adds panes; 'Open herdr' boots the herdr
   // TUI in one. Panes mount on first visit and stay alive across tabs.
-  const [termPanes, setTermPanes] = useState<TermPane[]>([{ id: 'pane-home', title: 'shell', cwd: '' }]);
+  // (0.13.0) The layout restores from localStorage — a restart
+  // brings the same panes and shares back. A saved layout with an
+  // agent attach re-runs the attach; if that agent is gone, the pane
+  // lands dead with its Reconnect button, honestly.
+  const [termPanes, setTermPanes] = useState<TermPane[]>(
+    () => loadTermLayout()?.panes ?? [{ id: 'pane-home', title: 'shell', cwd: '' }],
+  );
   const [termMounted, setTermMounted] = useState(false);
   // The chat view mounts on first visit and stays alive across tabs,
   // hidden instead of unmounted — the attach keeps its pty and its
@@ -1311,6 +1354,22 @@ export default function App() {
   // Pane ids whose shell has exited (terminal panes and the chat
   // attach alike) — the sidebar counts them for "Reconnect all".
   const [deadPanes, setDeadPanes] = useState<string[]>([]);
+  const deadPanesRef = useRef<string[]>([]);
+  useEffect(() => {
+    deadPanesRef.current = deadPanes;
+  }, [deadPanes]);
+  // herdr itself restarted (0.13.0): the server went away and came
+  // back. The banner offers Reconnect all — the restart is what
+  // killed the panes, so saying so beats silence.
+  const herdrDownRef = useRef(false);
+  // A restart is worth a banner only if something died while the
+  // server was away — but a dead chat attach UNMOUNTS when the agent
+  // list empties (ChatView drops the vanished agent), so by the time
+  // the server returns the live dead-pane list is empty again. The
+  // latch remembers that panes died during the outage; the up branch
+  // in refreshHerdr consumes it.
+  const hadDeadPanesRef = useRef(false);
+  const [herdrRestarted, setHerdrRestarted] = useState(false);
   const onExitState = useCallback((paneId: string, dead: boolean) => {
     setDeadPanes((prev) =>
       dead ? (prev.includes(paneId) ? prev : [...prev, paneId]) : prev.filter((p) => p !== paneId),
@@ -1320,7 +1379,68 @@ export default function App() {
   const [reconnectAllSignal, setReconnectAllSignal] = useState(0);
   // Split shares: one fraction per pane, summing to 1. Dragging a
   // divider moves share between its two neighbours (min 10% each).
-  const [termSizes, setTermSizes] = useState<number[]>([1]);
+  // Restored with the layout above, so a restart keeps the split.
+  const [termSizes, setTermSizes] = useState<number[]>(() => loadTermLayout()?.sizes ?? [1]);
+  // Persist the layout (panes + shares) on every change. Sign-in
+  // panes are left out — re-running `gh auth login` on every launch
+  // would be a nuisance, and the pane is one click to re-open.
+  useEffect(() => {
+    try {
+      const kept = termPanes
+        .map((p, i) => ({ pane: p, size: termSizes[i] ?? 1 }))
+        .filter(({ pane }) => !pane.title.startsWith('sign in: '));
+      if (kept.length === 0) return;
+      const total = kept.reduce((a, k) => a + k.size, 0);
+      window.localStorage.setItem(
+        'halo.termLayout',
+        JSON.stringify({
+          panes: kept.map(({ pane }) => ({
+            id: pane.id,
+            title: pane.title,
+            cwd: pane.cwd,
+            command: pane.command,
+          })),
+          sizes: kept.map(({ size }) => size / total),
+        }),
+      );
+    } catch {
+      // Private mode or no storage — the layout just doesn't stick.
+    }
+  }, [termPanes, termSizes]);
+  // Per-pane font zoom (0.13.0): a px delta per pane id, on top of
+  // Settings → Terminal font size. Ctrl+= / Ctrl+- adjust the
+  // focused pane, Ctrl+0 resets it. The badge in the pane bar shows
+  // the delta; a zoomed pane is how a squeezed opencode gets its
+  // columns back without touching the global size.
+  const [paneZoom, setPaneZoom] = useState<Record<string, number>>({});
+  const zoomFor = useCallback(
+    (paneId: string) => settings.terminal.fontSize + (paneZoom[paneId] ?? 0),
+    [settings.terminal.fontSize, paneZoom],
+  );
+  const zoomPane = useCallback((paneId: string, delta: number) => {
+    setPaneZoom((prev) => {
+      const next = { ...prev };
+      const cur = next[paneId] ?? 0;
+      const val = delta === 0 ? 0 : Math.max(-5, Math.min(8, cur + delta));
+      if (val === 0) delete next[paneId];
+      else next[paneId] = val;
+      return next;
+    });
+  }, []);
+  // One pane taking the whole Terminal tab (0.13.0): the others stay
+  // mounted (hidden, never unmounted — their ptys and scrollback
+  // survive, and the fit guard keeps a hidden pane from shrinking
+  // its pty to zero). The other half of the opencode answer, with
+  // zoom: maximize for width, zoom for columns.
+  const [maximizedPaneId, setMaximizedPaneId] = useState<string | null>(null);
+  const toggleMaximize = useCallback((paneId: string) => {
+    setMaximizedPaneId((prev) => (prev === paneId ? null : paneId));
+  }, []);
+  // Find + copy signals (0.13.0): the parent only says WHICH pane
+  // and bumps a nonce — the panel itself opens its search bar or
+  // copies its own selection. Never the other way round.
+  const [searchSignal, setSearchSignal] = useState<{ paneId: string; nonce: number } | null>(null);
+  const [copySignal, setCopySignal] = useState<{ paneId: string; nonce: number } | null>(null);
   const dividerDragRef = useRef<{ index: number; startX: number; width: number; start: number[] } | null>(null);
   // The sidebar resizes like herdr's desktop app: a drag handle on
   // its right edge, 200–420px, remembered across restarts. The width
@@ -1368,7 +1488,25 @@ export default function App() {
   }, []);
 
   const refreshHerdr = useCallback(() => {
-    if (window.halo) void window.halo.herdrStatus().then(setHerdr);
+    if (!window.halo) return;
+    void window.halo.herdrStatus().then((st) => {
+      // Down is a herdr error, not an empty list — zero agents with
+      // a clean answer is a real state, not a dead server.
+      const down = st.installed && st.detail.startsWith('herdr responded with an error');
+      if (down) {
+        herdrDownRef.current = true;
+        // Latch before setHerdr below: the empty agent list will
+        // unmount the dead chat attach and drain deadPanes.
+        if (deadPanesRef.current.length > 0) hadDeadPanesRef.current = true;
+      } else if (herdrDownRef.current) {
+        // The server went away and came back. If panes died in the
+        // meantime, the restart is worth a banner, not silence.
+        herdrDownRef.current = false;
+        if (hadDeadPanesRef.current) setHerdrRestarted(true);
+        hadDeadPanesRef.current = false;
+      }
+      setHerdr(st);
+    });
   }, []);
 
   const refreshConnections = useCallback(() => {
@@ -1394,8 +1532,18 @@ export default function App() {
   }, []);
 
   // Picking a trail switches to the Trails view; the detail effect
-  // below fetches its full view via `entire trail show`.
+  // below fetches its full view via `entire trail show`. The forge
+  // is set too — the quick switcher jumps from anywhere, and a trail
+  // picked while looking at GitHub would otherwise show the wrong
+  // detail view. (In the sidebar the forge is already 'entire', so
+  // this is a no-op there.)
   const selectTrail = useCallback((id: string) => {
+    setForge('entire');
+    try {
+      window.localStorage.setItem('halo.forge', 'entire');
+    } catch {
+      // Private mode or no storage — the switch still works.
+    }
     setSelectedId(id);
     setView('trail');
   }, []);
@@ -1421,8 +1569,15 @@ export default function App() {
 
   // Picking a PR or issue switches to the detail view; the detail
   // effect below fetches its full view via `gh pr view` / `gh issue
-  // view`.
+  // view`. The forge is set too, for the quick switcher (see
+  // selectTrail above).
   const selectGh = useCallback((id: string) => {
+    setForge('github');
+    try {
+      window.localStorage.setItem('halo.forge', 'github');
+    } catch {
+      // Private mode or no storage — the switch still works.
+    }
     setGhDetailNote('');
     setSelectedGhId(id);
     setView('trail');
@@ -1446,7 +1601,14 @@ export default function App() {
 
   // Picking an issue switches to the detail view; the detail effect
   // below fetches its full view via `get_issue` + `list_comments`.
+  // The forge is set too, for the quick switcher (see selectTrail).
   const selectLin = useCallback((id: string) => {
+    setForge('linear');
+    try {
+      window.localStorage.setItem('halo.forge', 'linear');
+    } catch {
+      // Private mode or no storage — the switch still works.
+    }
     setLinDetailNote('');
     setSelectedLinId(id);
     setView('trail');
@@ -1684,7 +1846,9 @@ export default function App() {
   // Which terminal pane the user is in — the split shortcuts and the
   // context menu act on this one. A pane reports focus when its
   // terminal gains it (the new pane focuses itself on spawn).
-  const [focusedPaneId, setFocusedPaneId] = useState<string | null>('pane-home');
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(
+    () => loadTermLayout()?.panes[0]?.id ?? 'pane-home',
+  );
   const onPaneFocus = useCallback((paneId: string) => {
     setFocusedPaneId(paneId);
   }, []);
@@ -1722,6 +1886,9 @@ export default function App() {
   );
 
   const closeTermPane = useCallback((id: string) => {
+    // Closing the maximized pane un-maximizes first — the rest of
+    // the layout comes back instead of a blank tab.
+    if (id === maximizedPaneId) setMaximizedPaneId(null);
     setTermPanes((panes) => {
       if (panes.length <= 1) return panes;
       const idx = panes.findIndex((p) => p.id === id);
@@ -1747,7 +1914,184 @@ export default function App() {
       const neighbour = termPanes[Math.max(0, idx - 1)] ?? termPanes[idx + 1];
       if (neighbour && neighbour.id !== id) setFocusedPaneId(neighbour.id);
     }
-  }, [termPanes]);
+  }, [termPanes, maximizedPaneId]);
+
+  // The pane Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+F / Ctrl+Shift+C act
+  // on: the chat attach pane while looking at Chat, else the focused
+  // Terminal pane. The chat pane's id is `chat-attach-<paneId>` (see
+  // ChatView) — derived from the pick, or the first live agent when
+  // nothing is picked yet.
+  const actionPaneId = useCallback((): string | null => {
+    if (view === 'chat') {
+      const pid = settings.activeAgentPaneId ?? herdr?.agents[0]?.paneId ?? null;
+      return pid ? `chat-attach-${pid}` : null;
+    }
+    return focusedPaneId ?? termPanes[termPanes.length - 1]?.id ?? null;
+  }, [view, settings.activeAgentPaneId, herdr, focusedPaneId, termPanes]);
+
+  // "New since you last looked" (0.13.0): seen ids per forge, in
+  // localStorage. A forge's button carries a pink dot while its list
+  // holds ids you haven't seen — the dot clears the moment you look
+  // at that forge, because its visible list is marked seen on every
+  // render where it is the active forge.
+  const [seenIds, setSeenIds] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = window.localStorage.getItem('halo.seenIds');
+      const parsed: unknown = raw ? JSON.parse(raw) : {};
+      if (typeof parsed === 'object' && parsed !== null) {
+        const rec = parsed as Record<string, unknown>;
+        const out: Record<string, string[]> = {};
+        for (const k of ['entire', 'github', 'linear']) {
+          out[k] = Array.isArray(rec[k])
+            ? (rec[k] as unknown[]).filter((x): x is string => typeof x === 'string')
+            : [];
+        }
+        return out;
+      }
+    } catch {
+      // Corrupt or unavailable — start fresh.
+    }
+    return { entire: [], github: [], linear: [] };
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('halo.seenIds', JSON.stringify(seenIds));
+    } catch {
+      // Private mode or no storage — the dots just don't stick.
+    }
+  }, [seenIds]);
+  useEffect(() => {
+    const ids =
+      forge === 'entire'
+        ? trails.map((t) => t.id)
+        : forge === 'github'
+          ? [...prs.map((p) => p.id), ...issues.map((i) => i.id)]
+          : linIssues.map((i) => i.id);
+    if (ids.length === 0) return;
+    setSeenIds((prev) => {
+      const have = new Set(prev[forge] ?? []);
+      if (ids.every((id) => have.has(id))) return prev;
+      return { ...prev, [forge]: [...have, ...ids.filter((id) => !have.has(id))] };
+    });
+  }, [forge, trails, prs, issues, linIssues]);
+  const unreadCounts = useMemo(() => {
+    const seen = (f: string) => new Set(seenIds[f] ?? []);
+    return {
+      entire: trails.filter((t) => !seen('entire').has(t.id)).length,
+      github: [...prs, ...issues].filter((x) => !seen('github').has(x.id)).length,
+      linear: linIssues.filter((i) => !seen('linear').has(i.id)).length,
+    };
+  }, [trails, prs, issues, linIssues, seenIds]);
+
+  // Live trails (0.13.0): one `entire trail watch --json` per
+  // project, streaming events into the renderer. Any event refreshes
+  // the list (debounced — a burst of events collapses into one
+  // refresh). The 30 s poll stays as the backstop, so a failed watch
+  // just means no "live" badge, never a stale list.
+  const [watchLive, setWatchLive] = useState(false);
+  const watchRefreshTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!window.halo) return;
+    let cancelled = false;
+    const offEvent = window.halo.onTrailEvent(() => {
+      setWatchLive(true);
+      if (watchRefreshTimerRef.current !== null) window.clearTimeout(watchRefreshTimerRef.current);
+      watchRefreshTimerRef.current = window.setTimeout(() => {
+        watchRefreshTimerRef.current = null;
+        refreshTrails();
+      }, 800);
+    });
+    const offStatus = window.halo.onTrailWatchStatus((status) => {
+      if (!status.ok) setWatchLive(false);
+    });
+    void window.halo.startTrailWatch().then((res) => {
+      if (!cancelled) setWatchLive(res.ok);
+    });
+    return () => {
+      cancelled = true;
+      offEvent();
+      offStatus();
+      if (watchRefreshTimerRef.current !== null) window.clearTimeout(watchRefreshTimerRef.current);
+      void window.halo?.stopTrailWatch();
+    };
+  }, [settings.entire.projects, refreshTrails]);
+
+  // Quick switcher (0.13.0): Ctrl+K opens a palette over the app —
+  // trails, PRs, issues, Linear issues, agents, notes, fuzzy by
+  // title. Enter jumps (and sets the right forge on the way); Esc
+  // closes. The list is built from the live state, never a copy.
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [switcherQuery, setSwitcherQuery] = useState('');
+  const [switcherIndex, setSwitcherIndex] = useState(0);
+  type SwitcherItem = {
+    key: string;
+    kind: 'Trail' | 'PR' | 'Issue' | 'Agent' | 'Note';
+    title: string;
+    meta: string;
+    run: () => void;
+  };
+  const switcherItems = useMemo<SwitcherItem[]>(() => {
+    const all: SwitcherItem[] = [
+      ...trails.map((t) => ({
+        key: `trail-${t.id}`,
+        kind: 'Trail' as const,
+        title: t.title,
+        meta: [t.project, t.phase].filter(Boolean).join(' · '),
+        run: () => selectTrail(t.id),
+      })),
+      ...prs.map((p) => ({
+        key: `pr-${p.id}`,
+        kind: 'PR' as const,
+        title: p.title,
+        meta: `${p.repo} · #${p.number} · ${p.author}`,
+        run: () => selectGh(p.id),
+      })),
+      ...issues.map((i) => ({
+        key: `issue-${i.id}`,
+        kind: 'Issue' as const,
+        title: i.title,
+        meta: `${i.repo} · #${i.number} · ${i.author}`,
+        run: () => selectGh(i.id),
+      })),
+      ...linIssues.map((i) => ({
+        key: `lin-${i.id}`,
+        kind: 'Issue' as const,
+        title: i.title,
+        meta: `${i.id} · ${i.team} · ${i.status}`,
+        run: () => selectLin(i.id),
+      })),
+      ...(herdr?.agents ?? []).map((a) => ({
+        key: `agent-${a.paneId}`,
+        kind: 'Agent' as const,
+        title: a.label,
+        meta: `${a.paneId} · ${a.status}`,
+        run: () => {
+          setSettings((s) => ({ ...s, activeAgentPaneId: a.paneId }));
+          setView('chat');
+        },
+      })),
+      ...notes.map((n) => ({
+        key: `note-${n.id}`,
+        kind: 'Note' as const,
+        title: n.title,
+        meta: n.source,
+        run: () => selectNote(n.id),
+      })),
+    ];
+    const q = switcherQuery.trim().toLowerCase();
+    if (!q) return all.slice(0, 8);
+    const scored = all
+      .map((it) => {
+        const title = it.title.toLowerCase();
+        const meta = it.meta.toLowerCase();
+        const score = title.startsWith(q) ? 0 : title.includes(q) ? 1 : meta.includes(q) ? 2 : -1;
+        return { it, score };
+      })
+      .filter((s) => s.score >= 0)
+      .sort((a, b) => a.score - b.score)
+      .map((s) => s.it);
+    return scored.slice(0, 8);
+  }, [trails, prs, issues, linIssues, herdr, notes, switcherQuery, selectTrail, selectGh, selectLin, selectNote]);
 
   // Right-click menu on a terminal pane (Split right / Close pane).
   // Positioned at the cursor; dismissed by clicking elsewhere,
@@ -1778,6 +2122,11 @@ export default function App() {
   // No leader key: a Ctrl+B leader would steal herdr's own prefix
   // from any herdr TUI running in a pane.
   //
+  // (0.13.0) The same handler carries the new keys: Ctrl+K opens
+  // the quick switcher from anywhere; Ctrl+= / Ctrl+- / Ctrl+0
+  // zoom the focused pane; Ctrl+F finds in it; Ctrl+Shift+C copies
+  // its selection; Ctrl+Shift+M maximizes it.
+  //
   // Capture phase, on purpose: the xterm's textarea handles keys
   // before a bubble-phase window listener ever sees them, so a
   // bubble listener would be too late — the key would already be in
@@ -1794,44 +2143,124 @@ export default function App() {
       return false;
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+      if (!e.ctrlKey || e.altKey || e.metaKey) return;
       if (isEditableTarget(e)) return;
       const key = e.key.toLowerCase();
-      if (key === 'd') {
-        // Split the focused pane, from any tab — it switches to
-        // Terminal, like opening a new terminal from anywhere.
+      // Ctrl+K — the quick switcher, from anywhere. (While the
+      // switcher is open its input has focus, so this branch never
+      // fires there — Esc closes it instead.)
+      if (key === 'k' && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
-        splitPane();
-        return;
-      }
-      // Close and focus-move only make sense while looking at the
-      // terminal — closing a pane you can't see would be a surprise.
-      if (view !== 'terminal') return;
-      if (key === 'q' || key === 'x') {
-        const target = focusedPaneId ?? termPanes[termPanes.length - 1]?.id;
-        if (target && termPanes.length > 1) {
-          e.preventDefault();
-          e.stopPropagation();
-          closeTermPane(target);
+        if (switcherOpen) {
+          setSwitcherOpen(false);
+        } else {
+          setSwitcherQuery('');
+          setSwitcherIndex(0);
+          setSwitcherOpen(true);
         }
         return;
       }
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        const idx = termPanes.findIndex((p) => p.id === focusedPaneId);
-        const cur = idx === -1 ? termPanes.length - 1 : idx;
-        const next = e.key === 'ArrowRight' ? Math.min(termPanes.length - 1, cur + 1) : Math.max(0, cur - 1);
-        const target = termPanes[next];
-        if (target && next !== cur) {
+      if (e.shiftKey) {
+        if (key === 'd') {
+          // Split the focused pane, from any tab — it switches to
+          // Terminal, like opening a new terminal from anywhere.
           e.preventDefault();
           e.stopPropagation();
-          setFocusedPaneId(target.id);
+          splitPane();
+          return;
         }
+        // Maximize and copy only make sense while looking at a
+        // terminal — acting on a pane you can't see would be a
+        // surprise.
+        if (view === 'terminal' || view === 'chat') {
+          if (key === 'c') {
+            const target = actionPaneId();
+            if (target) {
+              e.preventDefault();
+              e.stopPropagation();
+              setCopySignal((s) => ({ paneId: target, nonce: (s?.nonce ?? 0) + 1 }));
+            }
+            return;
+          }
+          if (key === 'm' && view === 'terminal') {
+            const target = focusedPaneId ?? termPanes[termPanes.length - 1]?.id;
+            if (target) {
+              e.preventDefault();
+              e.stopPropagation();
+              toggleMaximize(target);
+            }
+            return;
+          }
+        }
+        // Close and focus-move only make sense while looking at the
+        // terminal — closing a pane you can't see would be a surprise.
+        if (view !== 'terminal') return;
+        if (key === 'q' || key === 'x') {
+          const target = focusedPaneId ?? termPanes[termPanes.length - 1]?.id;
+          if (target && termPanes.length > 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeTermPane(target);
+          }
+          return;
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          const idx = termPanes.findIndex((p) => p.id === focusedPaneId);
+          const cur = idx === -1 ? termPanes.length - 1 : idx;
+          const next = e.key === 'ArrowRight' ? Math.min(termPanes.length - 1, cur + 1) : Math.max(0, cur - 1);
+          const target = termPanes[next];
+          if (target && next !== cur) {
+            e.preventDefault();
+            e.stopPropagation();
+            setFocusedPaneId(target.id);
+          }
+        }
+        return;
+      }
+      // Plain Ctrl (no shift): zoom + find, Terminal/Chat only.
+      // (Ctrl+= would otherwise zoom the whole Electron window.)
+      if (view !== 'terminal' && view !== 'chat') return;
+      if (key === '=' || key === '+') {
+        const target = actionPaneId();
+        if (target) {
+          e.preventDefault();
+          e.stopPropagation();
+          zoomPane(target, 1);
+        }
+        return;
+      }
+      if (key === '-') {
+        const target = actionPaneId();
+        if (target) {
+          e.preventDefault();
+          e.stopPropagation();
+          zoomPane(target, -1);
+        }
+        return;
+      }
+      if (key === '0') {
+        const target = actionPaneId();
+        if (target) {
+          e.preventDefault();
+          e.stopPropagation();
+          zoomPane(target, 0);
+        }
+        return;
+      }
+      if (key === 'f') {
+        const target = actionPaneId();
+        if (target) {
+          e.preventDefault();
+          e.stopPropagation();
+          setSearchSignal((s) => ({ paneId: target, nonce: (s?.nonce ?? 0) + 1 }));
+        }
+        return;
       }
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [view, termPanes, focusedPaneId, splitPane, closeTermPane]);
+  }, [view, termPanes, focusedPaneId, splitPane, closeTermPane, switcherOpen, actionPaneId, zoomPane, toggleMaximize]);
 
   // Dragging a divider moves share between its two neighbours. The
   // drag is measured against the sizes at drag start, so a fast drag
@@ -2120,6 +2549,9 @@ export default function App() {
               {dotFor('entire')}
               <EntireMark size={16} />
               <span className="f-label">Entire</span>
+              {unreadCounts.entire > 0 && (
+                <span className="unread-dot" title={`${unreadCounts.entire} new since you last looked`} />
+              )}
             </button>
             <button
               className={`forge-btn ${forge === 'github' ? 'active' : ''}`}
@@ -2129,6 +2561,9 @@ export default function App() {
               {dotFor('github')}
               <GitHubMark size={16} />
               <span className="f-label">GitHub</span>
+              {unreadCounts.github > 0 && (
+                <span className="unread-dot" title={`${unreadCounts.github} new since you last looked`} />
+              )}
             </button>
             <button
               className={`forge-btn ${forge === 'linear' ? 'active' : ''}`}
@@ -2138,11 +2573,21 @@ export default function App() {
               {dotFor('linear')}
               <LinearMark size={16} />
               <span className="f-label">Linear</span>
+              {unreadCounts.linear > 0 && (
+                <span className="unread-dot" title={`${unreadCounts.linear} new since you last looked`} />
+              )}
             </button>
           </div>
           {forge === 'entire' && (
             <>
-              <h2>Trails</h2>
+              <h2>
+                Trails{' '}
+                {watchLive && (
+                  <span className="live-dot" title="Live — `entire trail watch` is streaming">
+                    ● live
+                  </span>
+                )}
+              </h2>
               {trails.length === 0 && <p className="note">{trailsDetail || 'No trails yet.'}</p>}
               {trailGroups.et.map((g) => renderTrailGroup(g.project, g.trails))}
               {trailGroups.gh.length > 0 && <h2>GitHub</h2>}
@@ -2197,13 +2642,26 @@ export default function App() {
           {herdr ? (herdr.installed ? `herdr · ${herdr.agents.length} agent${herdr.agents.length === 1 ? '' : 's'}` : 'herdr not detected') : 'herdr…'}
           <span className="foot-refresh"> ↻</span>
         </button>
-        {deadPanes.length > 0 && (
+        {(deadPanes.length > 0 || herdrRestarted) && (
           <button
             className="reconnect-all"
-            onClick={() => setReconnectAllSignal((s) => s + 1)}
-            title="Re-spawn every terminal pane whose shell has exited — after a herdr restart, this brings them all back at once"
+            onClick={() => {
+              setHerdrRestarted(false);
+              setReconnectAllSignal((s) => s + 1);
+            }}
+            title={
+              herdrRestarted
+                ? deadPanes.length > 0
+                  ? 'herdr restarted — re-spawn every terminal pane whose shell has exited'
+                  : 'herdr restarted while you were away — your agents came back on their own; click to dismiss'
+                : 'Re-spawn every terminal pane whose shell has exited — after a herdr restart, this brings them all back at once'
+            }
           >
-            ↻ Reconnect all ({deadPanes.length})
+            {herdrRestarted
+              ? deadPanes.length > 0
+                ? `↻ herdr restarted — Reconnect all (${deadPanes.length})`
+                : '↻ herdr restarted — all agents back'
+              : `↻ Reconnect all (${deadPanes.length})`}
           </button>
         )}
       </aside>
@@ -2295,7 +2753,10 @@ export default function App() {
               onAttachState={onAttachState}
               onExitState={onExitState}
               reconnectSignal={reconnectAllSignal}
-              fontSize={settings.terminal.fontSize}
+              fontSize={activeAgent ? zoomFor(`chat-attach-${activeAgent.paneId}`) : settings.terminal.fontSize}
+              chatZoom={activeAgent ? (paneZoom[`chat-attach-${activeAgent.paneId}`] ?? 0) : 0}
+              searchSignal={searchSignal}
+              copySignal={copySignal}
             />
           </div>
         )}
@@ -2330,7 +2791,17 @@ export default function App() {
               <button className="icon-btn" onClick={() => addTermPane('herdr')} title="Boot the herdr TUI in a new pane">
                 ▤ Open herdr
               </button>
-              <span className="note">Panes stay alive when you switch tabs. “Open herdr” boots the herdr TUI in a pane. <kbd>Ctrl+Shift+D</kbd> split · <kbd>Ctrl+Shift+Q</kbd> close pane · <kbd>Ctrl+Shift+←/→</kbd> move between panes · right-click a pane for more.</span>
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  const id = focusedPaneId ?? termPanes[termPanes.length - 1]?.id;
+                  if (id) toggleMaximize(id);
+                }}
+                title="Maximize the focused pane (Ctrl+Shift+M)"
+              >
+                {maximizedPaneId ? '⤢ Unmaximize' : '⤢ Maximize'}
+              </button>
+              <span className="note">Panes stay alive when you switch tabs. “Open herdr” boots the herdr TUI in a pane. <kbd>Ctrl+Shift+D</kbd> split · <kbd>Ctrl+Shift+Q</kbd> close pane · <kbd>Ctrl+Shift+←/→</kbd> move between panes · <kbd>Ctrl+Shift+M</kbd> maximize · <kbd>Ctrl+=/−</kbd> zoom · <kbd>Ctrl+F</kbd> find · right-click a pane for more.</span>
             </div>
             <div className="terminal-panes">
               <Suspense
@@ -2342,7 +2813,7 @@ export default function App() {
               >
                 {termPanes.map((p, i) => (
                   <Fragment key={p.id}>
-                    {i > 0 && (
+                    {i > 0 && !maximizedPaneId && (
                       <div
                         className="term-divider"
                         role="separator"
@@ -2353,8 +2824,17 @@ export default function App() {
                     <TerminalPanel
                       pane={p}
                       onClose={termPanes.length > 1 ? () => closeTermPane(p.id) : undefined}
-                      style={{ flexGrow: termSizes[i] ?? 1, flexBasis: 0 }}
-                      fontSize={settings.terminal.fontSize}
+                      style={
+                        maximizedPaneId
+                          ? maximizedPaneId === p.id
+                            ? { flexGrow: 1, flexBasis: 0 }
+                            : { display: 'none' }
+                          : { flexGrow: termSizes[i] ?? 1, flexBasis: 0 }
+                      }
+                      fontSize={zoomFor(p.id)}
+                      zoom={paneZoom[p.id] ?? 0}
+                      searchSignal={searchSignal}
+                      copySignal={copySignal}
                       onAttachState={onAttachState}
                       onExitState={onExitState}
                       reconnectSignal={reconnectAllSignal}
@@ -2378,7 +2858,7 @@ export default function App() {
           className="ctx-menu"
           style={{
             left: Math.min(ctxMenu.x, window.innerWidth - 180),
-            top: Math.min(ctxMenu.y, window.innerHeight - 110),
+            top: Math.min(ctxMenu.y, window.innerHeight - 300),
           }}
           role="menu"
         >
@@ -2393,6 +2873,61 @@ export default function App() {
           </button>
           <button
             role="menuitem"
+            onClick={() => {
+              toggleMaximize(ctxMenu.paneId);
+              setCtxMenu(null);
+            }}
+          >
+            {maximizedPaneId === ctxMenu.paneId ? 'Unmaximize pane' : 'Maximize pane'}{' '}
+            <span className="ctx-key">Ctrl+Shift+M</span>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              zoomPane(ctxMenu.paneId, 1);
+              setCtxMenu(null);
+            }}
+          >
+            Zoom in <span className="ctx-key">Ctrl+=</span>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              zoomPane(ctxMenu.paneId, -1);
+              setCtxMenu(null);
+            }}
+          >
+            Zoom out <span className="ctx-key">Ctrl+−</span>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              zoomPane(ctxMenu.paneId, 0);
+              setCtxMenu(null);
+            }}
+          >
+            Reset zoom <span className="ctx-key">Ctrl+0</span>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setCopySignal((s) => ({ paneId: ctxMenu.paneId, nonce: (s?.nonce ?? 0) + 1 }));
+              setCtxMenu(null);
+            }}
+          >
+            Copy selection <span className="ctx-key">Ctrl+Shift+C</span>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setSearchSignal((s) => ({ paneId: ctxMenu.paneId, nonce: (s?.nonce ?? 0) + 1 }));
+              setCtxMenu(null);
+            }}
+          >
+            Find in pane <span className="ctx-key">Ctrl+F</span>
+          </button>
+          <button
+            role="menuitem"
             disabled={termPanes.length <= 1}
             onClick={() => {
               closeTermPane(ctxMenu.paneId);
@@ -2401,6 +2936,72 @@ export default function App() {
           >
             Close pane <span className="ctx-key">Ctrl+Shift+Q</span>
           </button>
+        </div>
+      )}
+      {switcherOpen && (
+        <div className="quick-switcher-backdrop" onClick={() => setSwitcherOpen(false)}>
+          <div
+            className="quick-switcher"
+            role="dialog"
+            aria-label="Jump to a trail, pull request, issue, agent, or note"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              autoFocus
+              type="text"
+              value={switcherQuery}
+              placeholder="Jump to a trail, PR, issue, agent, note…"
+              aria-label="Jump to"
+              onChange={(e) => {
+                setSwitcherQuery(e.target.value);
+                setSwitcherIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setSwitcherOpen(false);
+                } else if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSwitcherIndex((i) => (switcherItems.length === 0 ? 0 : (i + 1) % switcherItems.length));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSwitcherIndex((i) =>
+                    switcherItems.length === 0 ? 0 : (i - 1 + switcherItems.length) % switcherItems.length,
+                  );
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const item = switcherItems[switcherIndex];
+                  if (item) {
+                    item.run();
+                    setSwitcherOpen(false);
+                    setSwitcherQuery('');
+                  }
+                }
+              }}
+            />
+            <div className="quick-list">
+              {switcherItems.map((item, i) => (
+                <button
+                  key={item.key}
+                  className={i === switcherIndex ? 'active' : ''}
+                  onMouseEnter={() => setSwitcherIndex(i)}
+                  onClick={() => {
+                    item.run();
+                    setSwitcherOpen(false);
+                    setSwitcherQuery('');
+                  }}
+                >
+                  <span className="q-kind">{item.kind}</span>
+                  <span className="q-title">{item.title}</span>
+                  <span className="q-meta">{item.meta}</span>
+                </button>
+              ))}
+              {switcherItems.length === 0 && <p className="note">Nothing matches “{switcherQuery}”.</p>}
+            </div>
+            <p className="quick-hint">
+              <kbd>↑↓</kbd> move · <kbd>Enter</kbd> jump · <kbd>Esc</kbd> close
+            </p>
+          </div>
         </div>
       )}
     </div>

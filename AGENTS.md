@@ -412,15 +412,18 @@ what to build, where things live, and the lessons that apply here.
 - **Trails are real now, not stubs.** `halo:listTrails` / `halo:getTrail`
   shell out to the Entire CLI: `entire trail list --project <project>
   --json` for the sidebar, `entire trail show <id> --project <project>
-  --json` for the detail. `watchTrail()` is still a stub —
-  `entire trail watch --json` is the source when live streaming lands.
+  --json` for the detail. Live streaming landed in 0.13.0
+  (`startTrailWatch`, `entire trail watch --json` — see the 0.13.0
+  entry); the old `watchTrail()` stub is gone.
 - **The project is a Settings field, not derived.** `HaloSettings.entire
   .project` (e.g. `et/xvoidsx`, `gh/xvoidsx`), edited in Settings →
   Entire Trails. `entire trail list` requires `--project`, so an empty
   project means an empty list with an honest detail ("No Entire project
   configured — set it in Settings → Entire Trails."), never a bare
   "No trails yet." Deriving the project from repo remotes was
-  considered and rejected as too fragile.
+  considered and rejected as too fragile. Live streaming arrived in
+  0.13.0 (`startTrailWatch`, `entire trail watch --json` — see the
+  0.13.0 entry); the old `watchTrail()` stub is gone.
 - **The CLI boundary is defensive because the JSON shape is
   provisional.** `runEntire` (electron/herdrAdapter.ts, 15 s timeout —
   network calls get longer than herdr's 5 s) returns code -1 with
@@ -480,7 +483,11 @@ what to build, where things live, and the lessons that apply here.
   — the packaged app reads halotest's copy, not ~/workspace/.tmp.
   Also reset halotest's settings file to `projects: []` before the
   packaged ui-smoke run, or the leftover project lists a trail and
-  the empty-state checks fail (seen 0.8.0).
+  the empty-state checks fail (seen 0.8.0). The packaged
+  github-test needs `HALO_TEST_REPO=/home/halotest/repos/halo-test`
+  in its env — without it the test seeds the hatch workspace path
+  and the branch-status check fails on git's dubious-ownership
+  refusal (halotest running git in hatch's repo).
 - **0.8.0 — multi-project sidebar (2026-11-12): Trails stays Entire-only.**
   Settings holds a project *list* (`entire.projects`, one per line);
   the old single `project` string migrates in place on load
@@ -787,6 +794,121 @@ what to build, where things live, and the lessons that apply here.
   fix look like it hadn't landed). Full dev suite green on 0.12.0
   (connections 13 checks incl. labelsWhole at 270/280 + the hint
   wrap; chat-list flaked once on attachRenders, passed on re-run).
+
+- **0.13.0 — the QoL round (2026-11-12).** Raven's full approved
+  list from the first-night bench (06:20 CST), split off from
+  0.12.0's sidebar fix. Everything in one version:
+  - **Per-pane zoom.** `paneZoom` (Record<paneId, px delta>, clamp
+    −5..+8, 0 deletes the key) + `zoomFor(paneId)` (settings font
+    size + delta); Terminal takes a `zoom` prop and shows an amber
+    `+Npx` badge when zoom ≠ 0. Ctrl+=/− (plain Ctrl, terminal/chat
+    views), Ctrl+0 resets. Verified: 13px = 139 cols, 14px = 122
+    cols on the same pane.
+  - **Pane maximize.** `maximizedPaneId` + `toggleMaximize`; the
+    maximized pane gets flexGrow 1, the others `display: none`,
+    dividers hidden; closing the maximized pane clears it.
+    Ctrl+Shift+M (terminal only) + toolbar button + ctx menu.
+    **Trap:** the new pane focuses itself on spawn, so after a
+    Split the maximized pane is the NEW one — a test asserting
+    "the first pane is hidden" fails; assert exactly one hidden +
+    the visible one spans the container.
+  - **Layout persistence.** `halo.termLayout` in localStorage
+    ({panes: [{id,title,cwd,command?}], sizes}) — validated on
+    load (same length, finite positive sizes, normalized) and
+    written on every panes/sizes change. Panes whose title starts
+    with 'sign in: ' are skipped on save, so a login pane never
+    re-runs its command on launch. Initializers read the layout
+    (panes, sizes, focused pane = first restored id).
+  - **Ctrl+K quick switcher.** `switcherItems` memo over
+    trails/prs/issues/linIssues/herdr.agents/notes; ranked by
+    match (title-startsWith 0, title-includes 1, meta-includes 2),
+    capped at 8; Enter runs the item (selectTrail/selectGh/
+    selectLin — which now also setForge + persist halo.forge — or
+    jump to Chat for agents, selectNote for notes). The palette
+    is a backdrop + panel with autoFocus input; ArrowUp/Down wrap,
+    Esc closes. While the palette is open the input is focused, so
+    the window shortcut handler never fires inside it.
+  - **Unread dots.** `seenIds` in localStorage ({entire,github,
+    linear} string arrays); an effect merges the ACTIVE forge's
+    current ids into seen whenever the lists change; `unreadCounts`
+    memo counts the unseen per forge. The dot is absolutely
+    positioned (top 3px right 3px) so it never disturbs the
+    0.12.0 labelsWhole layout. **Test trap:** seenIds persists
+    across runs, so a re-run finds the ids already seen and the
+    dots never appear — the test clears `halo.seenIds` before the
+    reload.
+  - **Live trails.** `startTrailWatch(projects, onEvent,
+    onStatus)` replaces the `watchTrail()` stub (deleted, with
+    its `NotImplemented` interface): one long-lived `entire trail
+    watch --project <project> --json` per project, per-child line
+    buffer, only parseable JSON lines forwarded; the renderer
+    treats ANY event as "refresh the list" and never reads event
+    fields (the event shapes are docs-assumed, unverified against
+    a real CLI — Raven's bench is the honest check). The 30 s
+    list poll stays as backstop; the Trails h2 shows a cyan
+    `● live` badge while the watch is connected. `stopTrailWatch`
+    kills all children; `before-quit` calls it too.
+  - **In-pane find + copy.** `@xterm/addon-search@0.16.0`
+    (0.15.0 was rejected by npm — its peer wants @xterm/xterm
+    ^5.0.0, Halo is on xterm 6.0.0; 0.16.x pairs with xterm 6).
+    SearchAddon is created + loaded per pane and disposed before
+    term.dispose(). Ctrl+F opens the find bar (input autofocused,
+    findNext on change, ↑/↓, 'found'/'no match' + red border,
+    Esc closes); Ctrl+Shift+C copies the selection via
+    `term.getSelection()` → clipboard. Both ride `searchSignal`/
+    `copySignal` ({paneId, nonce}) so the window handler can
+    target the right pane (chat uses `chat-attach-<paneId>`).
+  - **Herdr-restart detection.** The 10 s herdr poll compares
+    down (`installed && detail startsWith('herdr responded with
+    an error')` — verified live: a dead server makes `herdr
+    agent list` exit 1 with a `server_not_running` JSON envelope
+    on stderr) against up. **Real bug, found by the test:** a
+    dead chat attach UNMOUNTS when the agent list empties
+    (ChatView drops the vanished agent), so by the time the
+    server returns `deadPanes` is empty and the banner never
+    fires. Fix: a `hadDeadPanesRef` latch, set on any down poll
+    while panes are dead (latched BEFORE setHerdr, which is what
+    drains the list), consumed on the up transition; the button
+    renders when `deadPanes.length > 0 || herdrRestarted`, and
+    when the attach already came back on its own it reads
+    "↻ herdr restarted — all agents back" (click dismisses).
+  - **Watch-cleanup traps (both real, both fixed this round).**
+    (1) Main spawns children that inherit its fds — including
+    the DevTools listen socket — so a surviving watch child
+    holds port 9222 bound after the app quits and the next
+    launch's DevTools endpoint hangs (fetch never resolves, CDP
+    tests stall with no output). `stopTrailWatch` now SIGKILLs
+    after a 2 s grace period; the fake `entire`'s watch loop
+    traps SIGTERM (a foreground `sleep 3600` defers SIGTERM
+    until the sleep finishes — the trap runs the sleep in the
+    background under `wait`). The 2 s SIGKILL only helps
+    reloads — on quit the process exits before it fires — so
+    the trap is what makes quit-clean work in the sandbox; the
+    real `entire` binary is a single process and dies on
+    SIGTERM. (2) A reload's renderer teardown can race the
+    watch-stop IPC, orphaning the old watch — `startTrailWatch`
+    calls `stopTrailWatch()` first, so a new start always kills
+    the previous watch.
+  - **Test fallout from the live badge.** The Trails h2 now
+    reads "Trails ● live" when the watch is connected, so three
+    older tests' exact `h2.includes('Trails')` assertions failed
+    (trails/github/linear) — they now match
+    `t.trim().startsWith('Trails')`. Connections-test section 7
+    asserted exactly 3 kbd chips in the hint; the hint now has 6
+    (maximize/zoom/find joined) — it asserts ≥3 with the first
+    Ctrl+Shift+D and M + F named. The chat-list timing flake
+    recurred once on `attachRenders` and passed on immediate
+    re-run (known, no code change).
+  - **New tests (all green dev on 0.13.0):**
+    `scripts/qol-test.mjs` (18 checks: live badge, unread dots,
+    switcher jump, zoom cols + badge + reset, maximize/unmaximize,
+    layout persistence across reload, find bar),
+    `scripts/trail-watch-test.mjs` (node-side, 10 checks against
+    the fake entire: event arrives, stop kills, restart works),
+    `scripts/herdr-restart-test.mjs` (CDP + real server restart,
+    ~60 s: attach dies, banner appears, click clears, attach
+    back; rebuilds the rig itself). Full dev suite green on
+    0.13.0 (23 tests incl. the two close tests).
 
 ## Terminal (xterm.js + node-pty)
 
