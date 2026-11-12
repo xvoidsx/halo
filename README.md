@@ -64,11 +64,22 @@ no fake replies, ever.
 - Drag its right edge to resize it (200–420px); the width sticks across
   restarts.
 - The **Agents** switcher shows live agents with status lights and jumps
-  to the selected agent's chat. Below it, the **forge switcher** flips
-  the list between Entire (Trails), GitHub (pull requests + issues),
-  and Linear (issues) — the vendors' own marks, shown unmodified as
-  platform indicators, one forge's list at a time. The footer shows
-  herdr's status (click ↻ to refresh).
+  to the selected agent's chat. Open it and there's a **Spawn an
+  agent** dropdown too: every agent kind herdr can start that is
+  actually installed on this machine (opencode, omp, hermes, pi,
+  codex — whatever `command -v` finds), pre-selecting your navi
+  default agent when it is one of them. Pick one, hit Spawn, and Halo
+  names it `<kind>-<n>`, starts it in a free pane (splitting one if
+  needed), and jumps straight into its chat. goose and wisp are navi
+  agents too, but herdr cannot start them — run those from a terminal
+  pane. Below the switcher, the **forge switcher** flips the list
+  between Entire (Trails), GitHub (pull requests + issues), and Linear
+  (issues) — the vendors' own marks, shown unmodified as platform
+  indicators, one forge's list at a time. The footer shows herdr's
+  status (click ↻ to refresh).
+- At a narrow width (under 260px) the forge buttons go icons-only and
+  long titles ellipsize instead of spilling — the sidebar stays
+  usable all the way down to its 200px floor.
 
 ### Trails
 
@@ -113,13 +124,52 @@ no fake replies, ever.
   with their authors, and a link out to Linear. Read-only: the
   connector's first grant is read-only, and Halo only ever calls read
   tools. Halo never holds a Linear token; it rides the connector's
-  existing OAuth connection.
+  existing OAuth connection. **On a machine without the connector,**
+  paste a personal API key (Settings → Linear, from
+  linear.app/settings/api) and Halo calls the Linear GraphQL API
+  directly instead — same list, same detail, same read-only rule.
+  The API returns priority as a number and the state as a nested
+  object; the adapter normalizes both into the connector's shape, so
+  one view serves both transports.
+
+### Connections — setup that installs itself
+
+- Every forge button carries a **connection dot**: green (tool present
+  and signed in), amber (present, not signed in), grey (not
+  installed). The same dot + a plain-language status line sits in
+  each forge's Settings section.
+- **Missing tool?** Settings offers Install: `gh` and the Entire CLI
+  download as archives from their official releases, the checksum is
+  verified against the published checksums file, and the binary lands
+  in `~/.local/bin` — no sudo, no install script executed, ever.
+  Notion's CLI (`ntn`) installs with `npm install -g ntn`. A tampered
+  archive fails the checksum and installs nothing.
+- **Not signed in?** Connect opens a setup terminal pane running the
+  login command (`gh auth login`, `entire login`, …) and re-probes
+  when it exits. Halo never asks for your credentials itself.
+
+### Notes
+
+- Its own section (✎ Notes in the sidebar), not a fourth forge: the
+  list merges **Notion** pages (recent first, or by search) with
+  **.md files from an Obsidian vault** (newest first). Obsidian is
+  first — the vault is markdown on disk, local-first, and needs no
+  auth at all; Notion is the shared-notes layer, reached through the
+  connector when it is present.
+- Click a note to read it. A Notion page without a token says so
+  honestly and points at Settings; with an **integration token**
+  (Settings → Notes, from notion.so/my-integrations) Halo reads the
+  full page text through the Notion API — and **pushes new notes** to
+  a database of your choice (pick it with Find databases; the token
+  only sees databases shared with the integration). A new note to the
+  vault is a plain `.md` file, written in the open.
 
 ### Settings
 
 - Settings live at `~/.config/halo/settings.json` (0600): repos, active
   repo/agent, Ollama base URL + default model, BYOK provider keys (stored
-  locally, never sent anywhere).
+  locally, never sent anywhere), Linear team + personal API key, Notes
+  (Notion token + target database + Obsidian vault path).
 
 ## What's real
 
@@ -166,6 +216,28 @@ no fake replies, ever.
   are debounced (150 ms) so a layout-settling storm collapses into one
   resize to the final size — verified with `stty size` on splits and
   divider drags.
+- Connections verified against fakes + mock servers (2026-11-12):
+  `gh auth status` / `entire auth status --json` / `linear
+  list_issues` / `notion-get-self` drive the dots; the installers
+  download real tarballs + checksums from a local fixture server
+  (a tampered tarball fails the checksum and installs nothing); the
+  Linear GraphQL + Notion REST transports run against canned mock
+  responses (priority numbers map to names, the API's `state {name,
+  type}` flattens into the connector's status, Notion's title
+  property is read from the database schema, never guessed). The
+  Notion connector shapes are real (verified live); the Entire
+  `--json` auth shape is still assumed — the probe accepts a `user`
+  string or a `sessions` array and treats any exit-0 JSON as signed
+  in, so a shape drift fails soft.
+- Notes verified against the fake `notion-cli` (real recent pages)
+  and a throwaway vault: list merges both sources newest-first,
+  vault detail renders the file, a Notion page without a token says
+  the token is needed, and creating a note writes the `.md` file and
+  lists it.
+- Spawn verified live against herdr 0.9.5: the dropdown lists only
+  installed kinds (opencode, pi, codex in the sandbox; omp/hermes
+  named as not installed), spawning pi creates a live `pi-1` agent
+  and jumps to its chat, and the pane is closed again afterwards.
 - No placeholder data anywhere. An empty trail list means no trail has run
   yet — the app never shows a trail that didn't happen.
 - No telemetry anywhere. Local-first by construction.

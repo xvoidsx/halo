@@ -6,7 +6,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { EntireConfig, GitHubConfig, HaloSettings, LinearConfig } from '../src/types.js';
+import type { EntireConfig, GitHubConfig, HaloSettings, LinearConfig, NotesConfig } from '../src/types.js';
 import { defaultSettings } from '../src/types.js';
 
 const DIR = path.join(os.homedir(), '.config', 'halo');
@@ -35,13 +35,34 @@ function normalizeEntire(raw: unknown): EntireConfig {
   return { projects: [] };
 }
 
-/** The Linear section holds a single `team` string (the team key
- * or name, e.g. 'xvoidsx'). A stray type falls back to the default
- * team — never a crash, never an invented filter. */
+/** The Linear section holds a `team` string (the team key or name,
+ * e.g. 'xvoidsx') plus an optional `apiKey` — a personal API key
+ * used only when the `linear` connector CLI is not available. A
+ * stray type falls back to the default team and an empty key —
+ * never a crash, never an invented filter. */
 function normalizeLinear(raw: unknown): LinearConfig {
-  const rec = (typeof raw === 'object' && raw !== null ? raw : {}) as { team?: unknown };
-  if (typeof rec.team === 'string' && rec.team.trim()) return { team: rec.team.trim() };
-  return { team: 'xvoidsx' };
+  const rec = (typeof raw === 'object' && raw !== null ? raw : {}) as { team?: unknown; apiKey?: unknown };
+  return {
+    team: typeof rec.team === 'string' && rec.team.trim() ? rec.team.trim() : 'xvoidsx',
+    apiKey: typeof rec.apiKey === 'string' ? rec.apiKey.trim() : '',
+  };
+}
+
+/** The Notes section holds three optional strings: a Notion
+ * integration token, the Notion database new notes push to, and a
+ * local Obsidian vault path. Anything non-string falls back to
+ * empty — an empty Notes section just means nothing is wired up. */
+function normalizeNotes(raw: unknown): NotesConfig {
+  const rec = (typeof raw === 'object' && raw !== null ? raw : {}) as {
+    notionToken?: unknown;
+    notionDatabaseId?: unknown;
+    obsidianPath?: unknown;
+  };
+  return {
+    notionToken: typeof rec.notionToken === 'string' ? rec.notionToken.trim() : '',
+    notionDatabaseId: typeof rec.notionDatabaseId === 'string' ? rec.notionDatabaseId.trim() : '',
+    obsidianPath: typeof rec.obsidianPath === 'string' ? rec.obsidianPath.trim() : '',
+  };
 }
 
 /** The GitHub section holds a `repos` list of owner/repo slugs.
@@ -70,6 +91,7 @@ export function loadSettings(): HaloSettings {
       entire: normalizeEntire(parsed.entire),
       github: normalizeGitHub(parsed.github),
       linear: normalizeLinear(parsed.linear),
+      notes: normalizeNotes(parsed.notes),
       terminal: { ...defaultSettings.terminal, ...(parsed.terminal ?? {}) },
       byok: {
         openai: { ...defaultSettings.byok.openai, ...(parsed.byok?.openai ?? {}) },

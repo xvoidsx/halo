@@ -3,15 +3,23 @@ import type { IpcRendererEvent } from 'electron';
 import type {
   AgentReadResult,
   AgentSendResult,
+  ConnectionStatus,
   GitHubIssueDetailResult,
   GitHubListResult,
   GitHubPRDetailResult,
   HaloSettings,
   HerdrState,
+  InstallResult,
   LinearIssueDetailResult,
   LinearListResult,
+  NoteDetailResult,
+  NotesListResult,
+  NotionDatabase,
+  SpawnResult,
+  SpawnableAgent,
   TermOpResult,
   TermSpawnResult,
+  ToolId,
   TrailDetailResult,
   TrailListResult,
 } from '../src/types.js';
@@ -38,6 +46,23 @@ contextBridge.exposeInMainWorld('halo', {
   herdrStatus: (): Promise<HerdrState> => ipcRenderer.invoke('halo:herdrStatus'),
   watchTrail: (id: string): Promise<{ status: string; todo: string }> =>
     ipcRenderer.invoke('halo:watchTrail', id),
+
+  // Spawning agents from the Agents dropdown.
+  getSpawnableAgents: (): Promise<{ kinds: SpawnableAgent[]; defaultKind: string }> =>
+    ipcRenderer.invoke('halo:getSpawnableAgents'),
+  spawnAgent: (kind: string): Promise<SpawnResult> => ipcRenderer.invoke('halo:spawnAgent', kind),
+
+  // Connections + installers — the sidebar dots and Settings buttons.
+  getConnections: (): Promise<ConnectionStatus[]> => ipcRenderer.invoke('halo:getConnections'),
+  installTool: (tool: ToolId): Promise<InstallResult> => ipcRenderer.invoke('halo:installTool', tool),
+
+  // Notes — Notion + Obsidian.
+  listNotes: (query?: string): Promise<NotesListResult> => ipcRenderer.invoke('halo:listNotes', query),
+  getNote: (id: string): Promise<NoteDetailResult> => ipcRenderer.invoke('halo:getNote', id),
+  createNote: (target: 'notion' | 'obsidian', title: string, body: string): Promise<{ id: string; url: string; problem: string }> =>
+    ipcRenderer.invoke('halo:createNote', target, title, body),
+  listNotionDatabases: (): Promise<{ databases: NotionDatabase[]; problem: string }> =>
+    ipcRenderer.invoke('halo:listNotionDatabases'),
 
   // Agent chat — by pane_id, never by bare label.
   agentSend: (paneId: string, text: string): Promise<AgentSendResult> =>

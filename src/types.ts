@@ -331,6 +331,92 @@ export interface LinearConfig {
    * connector's `list_issues` takes a team filter; empty means
    * the whole workspace. Default is the only team that exists. */
   team: string;
+  /** Personal API key (linear.app/settings/api, `lin_api_...`).
+   * Only used when the `linear` connector CLI is not available —
+   * Halo calls the GraphQL API directly with it. Stored in the
+   * local settings file (0600) like the BYOK keys. */
+  apiKey: string;
+}
+
+/** Notes live in two places: Notion (the shared layer) and an
+ * Obsidian vault (the local-first layer). The Notion token is an
+ * integration token (notion.so/my-integrations); the database is
+ * the one new notes are pushed to. The vault path is a local
+ * directory of .md files. All three are optional — an empty Notes
+ * section just means nothing is wired up yet. */
+export interface NotesConfig {
+  notionToken: string;
+  notionDatabaseId: string;
+  obsidianPath: string;
+}
+
+/** One connection's health, as the sidebar dot shows it. `connected`
+ * means the tool is present AND signed in; `not-authed` means the
+ * tool is installed but no login was found; `missing` means the
+ * binary is not on PATH at all. `detail` is the human line shown
+ * in Settings ("Signed in as rav3ndust", "Not logged in — run
+ * `gh auth login`", "gh not found — Install"). */
+export type ConnectionState = 'connected' | 'not-authed' | 'missing';
+
+export interface ConnectionStatus {
+  forge: 'entire' | 'github' | 'linear' | 'notion' | 'herdr';
+  state: ConnectionState;
+  detail: string;
+  username?: string;
+}
+
+export type ToolId = 'gh' | 'entire' | 'ntn';
+
+export interface InstallResult {
+  ok: boolean;
+  detail: string;
+}
+
+/** A note from either source. `source` tells the detail view
+ * where it lives and where "Open" goes (Notion URL, or the vault
+ * file path). */
+export interface NoteItem {
+  id: string;
+  title: string;
+  source: 'notion' | 'obsidian';
+  updatedAt: string;
+  url?: string;
+}
+
+export interface NoteDetail extends NoteItem {
+  content: string;
+}
+
+export interface NotesListResult {
+  notes: NoteItem[];
+  detail: string;
+}
+
+export interface NoteDetailResult {
+  note: NoteDetail | null;
+  detail: string;
+}
+
+export interface NotionDatabase {
+  id: string;
+  title: string;
+}
+
+/** One agent Halo can spawn: a herdr kind navi ships (or makes
+ * available), with whether its binary is on PATH right now. Only
+ * installed kinds are offered — a missing one is listed in the note
+ * under the dropdown instead. */
+export interface SpawnableAgent {
+  kind: string;
+  blurb: string;
+  installed: boolean;
+}
+
+export interface SpawnResult {
+  ok: boolean;
+  name: string;
+  paneId: string;
+  problem: string;
 }
 
 export interface HaloSettings {
@@ -341,6 +427,7 @@ export interface HaloSettings {
   entire: EntireConfig;
   github: GitHubConfig;
   linear: LinearConfig;
+  notes: NotesConfig;
   terminal: TerminalConfig;
   byok: {
     openai: ProviderConfig;
@@ -364,7 +451,8 @@ export const defaultSettings: HaloSettings = {
   ollama: { baseUrl: 'http://127.0.0.1:11434', defaultModel: 'qwen3:8b' },
   entire: { projects: [] },
   github: { repos: [] },
-  linear: { team: 'xvoidsx' },
+  linear: { team: 'xvoidsx', apiKey: '' },
+  notes: { notionToken: '', notionDatabaseId: '', obsidianPath: '' },
   terminal: { fontSize: 13 },
   byok: {
     openai: { apiKey: '', enabled: false },

@@ -1,6 +1,7 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AgentStatus,
+  ConnectionStatus,
   GitHubIssue,
   GitHubIssueDetail,
   GitHubPR,
@@ -8,9 +9,14 @@ import type {
   HaloSettings,
   HerdrAgent,
   HerdrState,
+  InstallResult,
   LinearIssue,
   LinearIssueDetail,
+  NoteDetail,
+  NoteItem,
+  NotionDatabase,
   RepoStatus,
+  ToolId,
   Trail,
 } from './types.js';
 import type { TermPane } from './Terminal.js';
@@ -23,7 +29,7 @@ import { EntireMark, GitHubMark, LinearMark } from './ForgeLogos.js';
 // when the Terminal tab opens.
 const TerminalPanel = lazy(() => import('./Terminal.js'));
 
-type View = 'trail' | 'settings' | 'terminal' | 'chat';
+type View = 'trail' | 'settings' | 'terminal' | 'chat' | 'notes';
 
 const STATUS_PILL: Record<string, string> = {
   running: 'cyan',
@@ -138,17 +144,73 @@ function AgentSwitcher({
   activePaneId,
   onPick,
   onRefresh,
+  onSpawned,
 }: {
   herdr: HerdrState | null;
   activePaneId: string | null;
   onPick: (paneId: string) => void;
   onRefresh: () => void;
+  onSpawned: (paneId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const live = herdr?.agents.length ?? 0;
+  // Spawnable kinds, fetched when the popover opens (never before —
+  // the probe shells out, and the popover is the only place it
+  // matters). Only installed kinds are offered; the rest are named
+  // in the note so the absence is honest, not invisible.
+  const [spawnKinds, setSpawnKinds] = useState<{ kind: string; blurb: string; installed: boolean }[]>([]);
+  const [spawnDefault, setSpawnDefault] = useState('');
+  const [spawnPicked, setSpawnPicked] = useState('');
+  const [spawning, setSpawning] = useState(false);
+  const [spawnMsg, setSpawnMsg] = useState('');
+
+  const loadSpawnable = () => {
+    if (!window.halo) return;
+    void window.halo.getSpawnableAgents().then((res) => {
+      setSpawnKinds(res.kinds);
+      setSpawnDefault(res.defaultKind);
+      const first = res.kinds.find((k) => k.installed);
+      setSpawnPicked(res.defaultKind && res.kinds.some((k) => k.kind === res.defaultKind && k.installed) ? res.defaultKind : (first?.kind ?? ''));
+    }).catch(() => {});
+  };
+
+  const spawn = async () => {
+    if (!window.halo || !spawnPicked || spawning) return;
+    setSpawning(true);
+    setSpawnMsg(`Starting ${spawnPicked}…`);
+    try {
+      const res = await window.halo.spawnAgent(spawnPicked);
+      if (!res.ok) {
+        setSpawnMsg(res.problem);
+        return;
+      }
+      setSpawnMsg(`Started ${res.name} — jumping to chat…`);
+      onSpawned(res.paneId);
+      setOpen(false);
+    } catch (e) {
+      setSpawnMsg(`Could not spawn: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSpawning(false);
+    }
+  };
+
+  const installedKinds = spawnKinds.filter((k) => k.installed);
+  const missingKinds = spawnKinds.filter((k) => !k.installed);
+
   return (
     <div className="agents-switch">
-      <button className="agents-chip" onClick={() => setOpen((o) => !o)} title="Switch chat agent">
+      <button
+        className="agents-chip"
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          if (next) {
+            setSpawnMsg('');
+            loadSpawnable();
+          }
+        }}
+        title="Switch chat agent"
+      >
         <span>Agents</span>
         <span className="dot">{herdr ? (herdr.installed ? `● ${live} live ▾` : '● herdr? ▾') : '● … ▾'}</span>
       </button>
@@ -160,7 +222,7 @@ function AgentSwitcher({
             {!herdr && <p className="note">Checking herdr…</p>}
             {herdr && !herdr.installed && <p className="note warn">● {herdr.detail}</p>}
             {herdr && herdr.installed && herdr.agents.length === 0 && (
-              <p className="note">No agents running — start one in herdr, then refresh.</p>
+              <p className="note">No agents running — spawn one below.</p>
             )}
             {herdr?.agents.map((a: HerdrAgent) => (
               <button
@@ -186,6 +248,32 @@ function AgentSwitcher({
             >
               <span>↻ Refresh agents</span>
             </button>
+            <h4>Spawn an agent</h4>
+            {installedKinds.length === 0 && <p className="note">No spawnable agents installed — more in navi-extras.</p>}
+            {installedKinds.length > 0 && (
+              <div className="spawn-row">
+                <select value={spawnPicked} onChange={(e) => setSpawnPicked(e.target.value)} disabled={spawning}>
+                  {installedKinds.map((k) => (
+                    <option key={k.kind} value={k.kind}>
+                      {k.kind} — {k.blurb}
+                    </option>
+                  ))}
+                </select>
+                <button className="icon-btn" onClick={spawn} disabled={spawning || !spawnPicked}>
+                  {spawning ? 'Starting…' : 'Spawn'}
+                </button>
+              </div>
+            )}
+            {spawnMsg && <p className="note">{spawnMsg}</p>}
+            {missingKinds.length > 0 && (
+              <p className="note">
+                Not installed: {missingKinds.map((k) => k.kind).join(', ')} — install them from navi-extras.
+              </p>
+            )}
+            {spawnDefault && (
+              <p className="note">Your navi default agent is {spawnDefault} — pre-selected above.</p>
+            )}
+            <p className="note">goose and wisp are navi agents too, but herdr cannot start them — run them from a terminal pane.</p>
           </div>
         </>
       )}
@@ -553,23 +641,258 @@ function LinearIssueView({ issue, loadNote }: { issue: LinearIssue | LinearIssue
   );
 }
 
+/** Notes: the list lives in the main view (the sidebar belongs to
+ * the forges), with the detail — or the new-note editor — beside it.
+ * The editor's target is whichever source is wired up: Notion (a
+ * database chosen in Settings) or the Obsidian vault. A target that
+ * is not configured is not offered. */
+function NotesView({
+  notes,
+  detail,
+  selected,
+  loadNote,
+  notionReady,
+  obsidianReady,
+  onSelect,
+  onRefresh,
+  onCreate,
+}: {
+  notes: NoteItem[];
+  detail: string;
+  selected: NoteDetail | null;
+  loadNote: string;
+  notionReady: boolean;
+  obsidianReady: boolean;
+  onSelect: (id: string) => void;
+  onRefresh: (query: string) => void;
+  onCreate: (target: 'notion' | 'obsidian', title: string, body: string) => Promise<{ id: string; problem: string }>;
+}) {
+  const [query, setQuery] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newBody, setNewBody] = useState('');
+  const [newTarget, setNewTarget] = useState<'notion' | 'obsidian'>(notionReady ? 'notion' : 'obsidian');
+  const [createMsg, setCreateMsg] = useState('');
+
+  const startCreate = () => {
+    setCreating(true);
+    setCreateMsg('');
+    setNewTarget(notionReady ? 'notion' : 'obsidian');
+  };
+
+  const pushNote = async () => {
+    if (!newTitle.trim() && !newBody.trim()) {
+      setCreateMsg('Give the note a title or some body first.');
+      return;
+    }
+    setCreateMsg('Pushing…');
+    const res = await onCreate(newTarget, newTitle.trim(), newBody);
+    if (res.problem) {
+      setCreateMsg(res.problem);
+      return;
+    }
+    setCreateMsg('Pushed.');
+    setNewTitle('');
+    setNewBody('');
+    setCreating(false);
+    onSelect(res.id);
+  };
+
+  return (
+    <div className="notes-view">
+      <div className="notes-list">
+        <div className="notes-tools">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onRefresh(query);
+            }}
+            placeholder="Search notes…"
+          />
+          <button className="icon-btn" onClick={() => onRefresh(query)} title="Refresh notes">
+            ↻
+          </button>
+          <button className="icon-btn" onClick={startCreate} title="Write a new note">
+            ＋ New
+          </button>
+        </div>
+        {notes.length === 0 && <p className="note">{detail || 'No notes yet.'}</p>}
+        {notes.map((n) => (
+          <button
+            key={n.id}
+            className={`note-row ${selected?.id === n.id && !creating ? 'active' : ''}`}
+            onClick={() => {
+              setCreating(false);
+              onSelect(n.id);
+            }}
+          >
+            <div className="t-title">
+              {n.title}
+              <span className={`pill ${n.source === 'notion' ? 'cyan' : 'green'}`}>{n.source}</span>
+            </div>
+            {n.updatedAt && <div className="t-meta">{n.updatedAt.slice(0, 10)}</div>}
+          </button>
+        ))}
+      </div>
+      <div className="notes-detail">
+        {creating ? (
+          <div className="note-editor">
+            <h3>New note</h3>
+            <label>
+              Title
+              <input type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Note title" />
+            </label>
+            <label>
+              Push to
+              <select value={newTarget} onChange={(e) => setNewTarget(e.target.value as 'notion' | 'obsidian')}>
+                <option value="notion" disabled={!notionReady}>
+                  Notion{notionReady ? '' : ' (not configured)'}
+                </option>
+                <option value="obsidian" disabled={!obsidianReady}>
+                  Obsidian vault{obsidianReady ? '' : ' (not configured)'}
+                </option>
+              </select>
+            </label>
+            <label>
+              Body
+              <textarea rows={12} value={newBody} onChange={(e) => setNewBody(e.target.value)} placeholder="Write the note…" />
+            </label>
+            <div className="save-row">
+              <button className="primary-btn" onClick={pushNote}>
+                Push note
+              </button>
+              <button className="icon-btn" onClick={() => setCreating(false)}>
+                Cancel
+              </button>
+              {createMsg && <span className="saved-msg">{createMsg}</span>}
+            </div>
+            {!notionReady && !obsidianReady && (
+              <p className="note">Nothing is wired up yet — add a Notion token or an Obsidian vault path in Settings → Notes.</p>
+            )}
+          </div>
+        ) : selected ? (
+          <>
+            <h3>{selected.title}</h3>
+            <p className="note">
+              {selected.source === 'notion' ? 'Notion' : 'Obsidian vault'}
+              {selected.updatedAt ? ` · ${selected.updatedAt.slice(0, 10)}` : ''}
+              {selected.url && (
+                <>
+                  {' · '}
+                  <a href={selected.url} target="_blank" rel="noreferrer">
+                    Open ↗
+                  </a>
+                </>
+              )}
+            </p>
+            {loadNote && <p className="note">{loadNote}</p>}
+            {selected.content ? (
+              <div className="gh-body">{selected.content}</div>
+            ) : (
+              !loadNote && <p className="note">No readable content — open it in Notion to read it.</p>
+            )}
+          </>
+        ) : (
+          <p className="note">{detail || 'Pick a note, or write a new one.'}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
   setSettings,
   herdr,
+  connections,
   onRefreshHerdr,
   onResetSidebarWidth,
+  onRefreshConnections,
+  onInstall,
+  onConnect,
+  onListNotionDatabases,
 }: {
   settings: HaloSettings;
   setSettings: (next: HaloSettings) => void;
   herdr: HerdrState | null;
+  connections: ConnectionStatus[];
   onRefreshHerdr: () => void;
   onResetSidebarWidth: () => void;
+  onRefreshConnections: () => void;
+  onInstall: (tool: ToolId) => Promise<InstallResult>;
+  onConnect: (command: string) => void;
+  onListNotionDatabases: () => Promise<{ databases: NotionDatabase[]; problem: string }>;
 }) {
   const [saved, setSaved] = useState('');
   const [version, setVersion] = useState('');
   const [newRepoName, setNewRepoName] = useState('');
   const [newRepoPath, setNewRepoPath] = useState('');
+  const [connMsg, setConnMsg] = useState('');
+  const [installing, setInstalling] = useState<ToolId | ''>('');
+  const [databases, setDatabases] = useState<NotionDatabase[]>([]);
+  const [dbMsg, setDbMsg] = useState('');
+  const [dbLoading, setDbLoading] = useState(false);
+
+  // One row per forge: the dot, what the probe actually said, and
+  // the next step — Install when the tool is missing, Connect when
+  // it is installed but not signed in. Connect opens a setup terminal
+  // pane running the login command; Install downloads the release
+  // archive, verifies its checksum, and extracts it to ~/.local/bin.
+  const connRow = (forge: 'entire' | 'github' | 'linear' | 'notion', install?: ToolId, loginCmd?: string) => {
+    const c = connections.find((x) => x.forge === forge);
+    if (!c) return <p className="note">Checking connection…</p>;
+    const dotClass = c.state === 'connected' ? 'green' : c.state === 'not-authed' ? 'amber' : 'grey';
+    return (
+      <p className="note">
+        <span className={`conn-dot ${dotClass}`} /> {c.detail}{' '}
+        {c.state === 'missing' && install && (
+          <button className="icon-btn" disabled={installing === install} onClick={() => runInstall(install)}>
+            {installing === install ? 'Installing…' : `Install ${install}`}
+          </button>
+        )}
+        {c.state === 'not-authed' && loginCmd && (
+          <button className="icon-btn" onClick={() => onConnect(loginCmd)}>
+            Connect
+          </button>
+        )}
+      </p>
+    );
+  };
+
+  const runInstall = async (tool: ToolId) => {
+    setInstalling(tool);
+    setConnMsg(`Installing ${tool}…`);
+    try {
+      const res = await onInstall(tool);
+      setConnMsg(res.detail);
+      onRefreshConnections();
+    } catch (e) {
+      setConnMsg(`Install failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setInstalling('');
+    }
+  };
+
+  const findDatabases = async () => {
+    setDbLoading(true);
+    setDbMsg('');
+    try {
+      const res = await onListNotionDatabases();
+      setDatabases(res.databases);
+      setDbMsg(
+        res.problem ||
+          (res.databases.length
+            ? `${res.databases.length} database${res.databases.length === 1 ? '' : 's'} found — pick one below.`
+            : 'No databases found.'),
+      );
+    } catch (e) {
+      setDbMsg(`Could not list databases: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDbLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (window.halo) window.halo.getVersion().then(setVersion).catch(() => {});
@@ -675,6 +998,8 @@ function SettingsView({
           placeholder={'et/xvoidsx\ngh/rav3ndust'}
         />
       </label>
+      {connRow('entire', 'entire', 'entire login')}
+      {connMsg && <p className="note">{connMsg}</p>}
       <p className="note">
         The Trails list comes from `entire trail list --project`, which needs a project — `et/&lt;project&gt;` for a
         native Entire repo, `gh/&lt;owner&gt;` for a GitHub mirror. Trails stay an Entire thing: native projects
@@ -703,6 +1028,7 @@ function SettingsView({
           placeholder={'xvoidsx/halo\nxvoidsx/navi'}
         />
       </label>
+      {connRow('github', 'gh', 'gh auth login')}
       <p className="note">
         Pull requests and issues come from `gh pr list` / `gh issue list`, so the `gh` CLI must be installed and
         logged in (`gh auth login`) — Halo never holds a token of its own. Branch status (ahead/behind, dirty) is
@@ -720,12 +1046,83 @@ function SettingsView({
           placeholder="xvoidsx"
         />
       </label>
+      <label>
+        Personal API key (only when the connector is not available)
+        <input
+          type="password"
+          value={settings.linear.apiKey}
+          onChange={(e) => setSettings({ ...settings, linear: { ...settings.linear, apiKey: e.target.value } })}
+          placeholder="lin_api_… — not configured"
+        />
+      </label>
+      {connRow('linear')}
       <p className="note">
-        Issues come from the `linear` connector CLI (`call-tool list_issues` / `get_issue` / `list_comments`), so
-        the Linear connector must be connected — Halo never holds a token of its own, it rides the existing
-        connection. Read-only for now: the connector's first grant is read-only, and Halo only ever calls read
-        tools. Empty team means the whole workspace.
+        Issues come from the `linear` connector CLI first (`call-tool list_issues` / `get_issue` / `list_comments`),
+        so on a machine with the connector Halo never holds a token of its own — it rides the existing connection.
+        On a machine without the connector, Halo calls the Linear GraphQL API directly with the personal API key
+        above (create one at{' '}
+        <a href="https://linear.app/settings/api" target="_blank" rel="noreferrer">
+          linear.app/settings/api
+        </a>
+        ). Read-only for now: the connector's first grant is read-only, and Halo only ever calls read queries.
+        Empty team means the whole workspace.
       </p>
+
+      <h3>Notes</h3>
+      <label>
+        Notion integration token (for reading pages + pushing notes)
+        <input
+          type="password"
+          value={settings.notes.notionToken}
+          onChange={(e) => setSettings({ ...settings, notes: { ...settings.notes, notionToken: e.target.value } })}
+          placeholder="ntn_… / secret_… — not configured"
+        />
+      </label>
+      {connRow('notion', 'ntn')}
+      <label>
+        Target database (new notes are pushed here)
+        <select
+          value={settings.notes.notionDatabaseId}
+          onChange={(e) => setSettings({ ...settings, notes: { ...settings.notes, notionDatabaseId: e.target.value } })}
+        >
+          <option value="">— pick a database —</option>
+          {settings.notes.notionDatabaseId && !databases.some((d) => d.id === settings.notes.notionDatabaseId) && (
+            <option value={settings.notes.notionDatabaseId}>{settings.notes.notionDatabaseId} (saved)</option>
+          )}
+          {databases.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="icon-btn" disabled={dbLoading} onClick={findDatabases}>
+        {dbLoading ? 'Looking…' : 'Find databases'}
+      </button>
+      {dbMsg && <p className="note">{dbMsg}</p>}
+      <label>
+        Obsidian vault path
+        <input
+          type="text"
+          value={settings.notes.obsidianPath}
+          onChange={(e) => setSettings({ ...settings, notes: { ...settings.notes, obsidianPath: e.target.value } })}
+          placeholder="/home/rav3ndust/notes"
+        />
+      </label>
+      <p className="note">
+        Notes list Notion pages (recent first, or by search) and .md files from the Obsidian vault, newest first.
+        Reading a Notion page inside Halo and pushing a new note to a database need the integration token — create
+        one at{' '}
+        <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer">
+          notion.so/my-integrations
+        </a>{' '}
+        and share the target database with it ("Add connections" in Notion — an unshared database 404s). Without a
+        token, Halo still lists and searches through the Notion connector when it is present. The Obsidian vault
+        needs no auth at all: Halo reads and writes the .md files directly.
+      </p>
+      <button className="icon-btn" onClick={onRefreshConnections}>
+        ↻ Refresh connections
+      </button>
 
       <h3>Ollama — local-first</h3>
       <label>
@@ -887,6 +1284,20 @@ export default function App() {
   const linRef = useRef<LinearIssue[]>([]);
   const [settings, setSettings] = useState<HaloSettings>(defaultSettings);
   const [herdr, setHerdr] = useState<HerdrState | null>(null);
+  // Connection health: one probe per forge, refreshed on mount, when
+  // Settings opens, and after any Install/Connect. The dots in the
+  // forge switcher read this; the Settings rows show the detail.
+  const [connections, setConnections] = useState<ConnectionStatus[]>([]);
+  // Notes: Notion + Obsidian, newest first. Same list/detail shape
+  // as trails/GitHub/Linear — a synchronous mirror for the detail
+  // effect, a detail note for the empty states, per-note details
+  // that survive list refreshes.
+  const [notes, setNotes] = useState<NoteItem[]>([]);
+  const [notesDetail, setNotesDetail] = useState('');
+  const [noteDetails, setNoteDetails] = useState<Record<string, NoteDetail>>({});
+  const [noteDetailNote, setNoteDetailNote] = useState('');
+  const [selectedNoteId, setSelectedNoteId] = useState<string>('');
+  const notesRef = useRef<NoteItem[]>([]);
   // Terminal panes are first-class: one shell by default, at home —
   // no repo required. Split adds panes; 'Open herdr' boots the herdr
   // TUI in one. Panes mount on first visit and stay alive across tabs.
@@ -958,6 +1369,10 @@ export default function App() {
 
   const refreshHerdr = useCallback(() => {
     if (window.halo) void window.halo.herdrStatus().then(setHerdr);
+  }, []);
+
+  const refreshConnections = useCallback(() => {
+    if (window.halo) void window.halo.getConnections().then(setConnections).catch(() => {});
   }, []);
 
   // Trails come from the Entire CLI (main reads the configured project
@@ -1037,6 +1452,39 @@ export default function App() {
     setView('trail');
   }, []);
 
+  // Notes come from Notion (recent pages, or a search) and the
+  // Obsidian vault (main reads both from settings). Refreshed on
+  // mount and when the Notes view opens — notes change rarely, so
+  // there is no 30 s timer for them.
+  const refreshNotes = useCallback((query?: string) => {
+    if (!window.halo) return;
+    void window.halo.listNotes(query ?? '').then((res) => {
+      setNotes(res.notes);
+      notesRef.current = res.notes;
+      setNotesDetail(res.detail);
+      setSelectedNoteId((prev) => {
+        if (prev && res.notes.some((n) => n.id === prev)) return prev;
+        return res.notes[0]?.id ?? '';
+      });
+    });
+  }, []);
+
+  const selectNote = useCallback((id: string) => {
+    setNoteDetailNote('');
+    setSelectedNoteId(id);
+    setView('notes');
+  }, []);
+
+  const createNote = useCallback(
+    async (target: 'notion' | 'obsidian', title: string, body: string) => {
+      if (!window.halo) return { id: '', problem: 'No Electron bridge (browser preview).' };
+      const res = await window.halo.createNote(target, title, body);
+      if (!res.problem) refreshNotes();
+      return { id: res.id, problem: res.problem };
+    },
+    [refreshNotes],
+  );
+
   // Switching forges remembers the choice and refreshes the list
   // when landing on it — an issue opened after launch still shows
   // up live.
@@ -1068,6 +1516,8 @@ export default function App() {
     refreshTrails();
     refreshGitHub();
     refreshLinear();
+    refreshConnections();
+    refreshNotes();
     void window.halo.getSettings().then(setSettings);
     refreshHerdr();
     // Live detection: herdr agents come and go — re-check while Halo is
@@ -1082,7 +1532,38 @@ export default function App() {
       window.clearInterval(ghTimer);
       window.clearInterval(linTimer);
     };
-  }, [refreshHerdr, refreshTrails, refreshGitHub, refreshLinear]);
+  }, [refreshHerdr, refreshTrails, refreshGitHub, refreshLinear, refreshConnections, refreshNotes]);
+
+  // Opening Settings re-probes the connections (the user may have
+  // just signed in from a setup terminal); opening Notes refreshes
+  // the list (a note may have landed from Notion or the vault).
+  useEffect(() => {
+    if (view === 'settings') refreshConnections();
+    if (view === 'notes') refreshNotes();
+  }, [view, refreshConnections, refreshNotes]);
+
+  // The list carries intent only; the note detail comes from the
+  // API (Notion) or the vault file (Obsidian), fetched when a note
+  // is picked. It lands in noteDetails, so a list refresh never
+  // clobbers a fuller note with its thin list row.
+  useEffect(() => {
+    if (!selectedNoteId || !window.halo) return;
+    let cancelled = false;
+    void window.halo.getNote(selectedNoteId).then((res) => {
+      if (cancelled) return;
+      if (res.note) {
+        setNoteDetails((prev) => ({ ...prev, [res.note!.id]: res.note! }));
+        // A note can arrive WITH a detail (the no-token Notion page
+        // carries the "add a token" hint) — keep it, don't clear it.
+        setNoteDetailNote(res.detail ?? '');
+      } else {
+        setNoteDetailNote(res.detail);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedNoteId]);
 
   // The list carries intent only; the detail view comes from
   // `entire trail show`, fetched when a trail is picked (or on first
@@ -1188,6 +1669,17 @@ export default function App() {
     });
     setView('terminal');
   }, []);
+
+  // Connect opens a setup terminal pane running the login command
+  // (`gh auth login`, `entire login`) — the user signs in there, in
+  // the open, and the dot flips green on the next probe (opening
+  // Settings re-probes).
+  const openSetupTerminal = useCallback(
+    (command: string) => {
+      addTermPane(command, `sign in: ${command.split(' ')[0]}`);
+    },
+    [addTermPane],
+  );
 
   // Which terminal pane the user is in — the split shortcuts and the
   // context menu act on this one. A pane reports focus when its
@@ -1527,6 +2019,18 @@ export default function App() {
     [selectedLinId, linDetails, linIssues],
   );
 
+  // The selected note: the full detail when it has loaded, else the
+  // thin list row (title + source + link) so the pane is never
+  // empty while the fetch is in flight.
+  const selectedNote = useMemo(() => {
+    if (!selectedNoteId) return null;
+    const full = noteDetails[selectedNoteId];
+    if (full) return full;
+    const row = notes.find((n) => n.id === selectedNoteId);
+    if (!row) return null;
+    return { ...row, content: '' } as NoteDetail;
+  }, [selectedNoteId, noteDetails, notes]);
+
   // Dragging the sidebar's right edge resizes it. The width is
   // clamped live and saved when the drag ends, so it sticks.
   const onSidebarPointerDown = (e: React.PointerEvent) => {
@@ -1557,6 +2061,15 @@ export default function App() {
     [herdr, settings.activeAgentPaneId],
   );
 
+  // The sidebar dot for a forge: green is signed in, amber is
+  // installed but not signed in, grey is not installed (or the probe
+  // has not run yet). Steady glow, never flashing.
+  const dotFor = (f: 'entire' | 'github' | 'linear') => {
+    const c = connections.find((x) => x.forge === f);
+    const cls = !c ? 'grey' : c.state === 'connected' ? 'green' : c.state === 'not-authed' ? 'amber' : 'grey';
+    return <span className={`conn-dot ${cls}`} title={c?.detail ?? 'Checking connection…'} />;
+  };
+
   const headTitle =
     view === 'trail'
       ? forge === 'github'
@@ -1568,11 +2081,17 @@ export default function App() {
         ? 'Terminal'
         : view === 'chat'
           ? `Chat — ${activeAgent?.label ?? 'no agent'}`
-          : 'Settings';
+          : view === 'notes'
+            ? (selectedNote?.title ?? 'Notes')
+            : 'Settings';
 
   return (
     <div className="shell">
-      <aside className="sidebar" style={{ width: sidebarWidth, flex: `0 0 ${sidebarWidth}px` }}>
+      <aside
+        className="sidebar"
+        data-narrow={sidebarWidth < 260 ? 'true' : 'false'}
+        style={{ width: sidebarWidth, flex: `0 0 ${sidebarWidth}px` }}
+      >
         <div className="brand">
           <h1>HALO</h1>
           <p className="tagline">your workspace, one live view</p>
@@ -1585,6 +2104,11 @@ export default function App() {
             setView('chat');
           }}
           onRefresh={refreshHerdr}
+          onSpawned={(paneId) => {
+            refreshHerdr();
+            setSettings((s) => ({ ...s, activeAgentPaneId: paneId }));
+            setView('chat');
+          }}
         />
         <div className="trail-list">
           <div className="forge-switch" role="tablist" aria-label="Forge">
@@ -1593,24 +2117,27 @@ export default function App() {
               onClick={() => switchForge('entire')}
               title="Entire — Trails"
             >
+              {dotFor('entire')}
               <EntireMark size={18} />
-              Entire
+              <span className="f-label">Entire</span>
             </button>
             <button
               className={`forge-btn ${forge === 'github' ? 'active' : ''}`}
               onClick={() => switchForge('github')}
               title="GitHub — pull requests and issues"
             >
+              {dotFor('github')}
               <GitHubMark size={18} />
-              GitHub
+              <span className="f-label">GitHub</span>
             </button>
             <button
               className={`forge-btn ${forge === 'linear' ? 'active' : ''}`}
               onClick={() => switchForge('linear')}
               title="Linear — issues"
             >
+              {dotFor('linear')}
               <LinearMark size={18} />
-              Linear
+              <span className="f-label">Linear</span>
             </button>
           </div>
           {forge === 'entire' && (
@@ -1655,6 +2182,16 @@ export default function App() {
             </>
           )}
         </div>
+        <button
+          className={`notes-btn ${view === 'notes' ? 'active' : ''}`}
+          onClick={() => {
+            setView('notes');
+            refreshNotes();
+          }}
+          title="Notes — Notion and Obsidian, in one place"
+        >
+          ✎ Notes
+        </button>
         <button className="sidebar-foot" onClick={refreshHerdr} title="Refresh herdr agents">
           <span className={`status-light ${herdr ? (herdr.installed ? (herdr.agents.length ? 'green' : 'amber') : 'gray') : 'gray'}`}>●</span>
           {herdr ? (herdr.installed ? `herdr · ${herdr.agents.length} agent${herdr.agents.length === 1 ? '' : 's'}` : 'herdr not detected') : 'herdr…'}
@@ -1705,6 +2242,15 @@ export default function App() {
           >
             ✦ Chat
           </button>
+          <button
+            className={`icon-btn ${view === 'notes' ? 'active' : ''}`}
+            onClick={() => {
+              setView('notes');
+              refreshNotes();
+            }}
+          >
+            ✎ Notes
+          </button>
           <button className={`icon-btn ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>
             ⚙ Settings
           </button>
@@ -1724,6 +2270,21 @@ export default function App() {
           <LinearIssueView issue={selectedLin} loadNote={linDetailNote} />
         )}
         {view === 'trail' && forge === 'linear' && !selectedLin && <LinearEmpty detail={linearDetail} />}
+        {view === 'notes' && (
+          <NotesView
+            notes={notes}
+            detail={notesDetail}
+            selected={selectedNote}
+            loadNote={
+              selectedNoteId && !noteDetails[selectedNoteId] ? noteDetailNote || 'Loading…' : noteDetailNote
+            }
+            notionReady={Boolean(settings.notes.notionToken)}
+            obsidianReady={Boolean(settings.notes.obsidianPath.trim())}
+            onSelect={selectNote}
+            onRefresh={refreshNotes}
+            onCreate={createNote}
+          />
+        )}
         {chatMounted && (
           <div className={`chat-view ${view === 'chat' ? '' : 'hidden'}`}>
             <ChatView
@@ -1738,7 +2299,28 @@ export default function App() {
             />
           </div>
         )}
-        {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} onResetSidebarWidth={resetSidebarWidth} />}
+        {view === 'settings' && (
+          <SettingsView
+            settings={settings}
+            setSettings={setSettings}
+            herdr={herdr}
+            connections={connections}
+            onRefreshHerdr={refreshHerdr}
+            onResetSidebarWidth={resetSidebarWidth}
+            onRefreshConnections={refreshConnections}
+            onInstall={(tool) =>
+              window.halo
+                ? window.halo.installTool(tool)
+                : Promise.resolve({ ok: false, detail: 'No Electron bridge (browser preview).' })
+            }
+            onConnect={openSetupTerminal}
+            onListNotionDatabases={() =>
+              window.halo
+                ? window.halo.listNotionDatabases()
+                : Promise.resolve({ databases: [], problem: 'No Electron bridge (browser preview).' })
+            }
+          />
+        )}
         {termMounted && (
           <div className={`terminal-view ${view === 'terminal' ? '' : 'hidden'}`}>
             <div className="terminal-toolbar">

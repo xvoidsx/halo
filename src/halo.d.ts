@@ -1,15 +1,23 @@
 import type {
   AgentReadResult,
   AgentSendResult,
+  ConnectionStatus,
   GitHubIssueDetailResult,
   GitHubListResult,
   GitHubPRDetailResult,
   HaloSettings,
   HerdrState,
+  InstallResult,
   LinearIssueDetailResult,
   LinearListResult,
+  NoteDetailResult,
+  NotesListResult,
+  NotionDatabase,
+  SpawnResult,
+  SpawnableAgent,
   TermOpResult,
   TermSpawnResult,
+  ToolId,
   TrailDetailResult,
   TrailListResult,
 } from './types';
@@ -29,6 +37,14 @@ declare global {
       getLinearIssue: (id: string) => Promise<LinearIssueDetailResult>;
       herdrStatus: () => Promise<HerdrState>;
       watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
+      getSpawnableAgents: () => Promise<{ kinds: SpawnableAgent[]; defaultKind: string }>;
+      spawnAgent: (kind: string) => Promise<SpawnResult>;
+      getConnections: () => Promise<ConnectionStatus[]>;
+      installTool: (tool: ToolId) => Promise<InstallResult>;
+      listNotes: (query?: string) => Promise<NotesListResult>;
+      getNote: (id: string) => Promise<NoteDetailResult>;
+      createNote: (target: 'notion' | 'obsidian', title: string, body: string) => Promise<{ id: string; url: string; problem: string }>;
+      listNotionDatabases: () => Promise<{ databases: NotionDatabase[]; problem: string }>;
       agentSend: (paneId: string, text: string) => Promise<AgentSendResult>;
       agentRead: (paneId: string, lines?: number) => Promise<AgentReadResult>;
       termSpawn: (repoId: string, cwd: string, cols: number, rows: number, command?: string) => Promise<TermSpawnResult>;

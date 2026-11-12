@@ -41,6 +41,9 @@
 //   `entire trail watch --json` — not built yet.
 
 import { execFile } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type {
   AgentReadResult,
   AgentSendResult,
@@ -48,6 +51,8 @@ import type {
   Gate,
   HerdrAgent,
   HerdrState,
+  SpawnResult,
+  SpawnableAgent,
   Trail,
   TrailDetailResult,
   TrailListResult,
@@ -483,6 +488,206 @@ export async function sendAgentMessage(paneId: string, text: string): Promise<Ag
     };
   }
   return { ok: true, detail: 'Sent to the agent.' };
+}
+
+// --- Spawning agents ---
+//
+// The dropdown in the Agents switcher offers the herdr kinds navi
+// ships or makes available — opencode, omp, hermes, pi, codex — and
+// only the ones whose binary is actually on PATH. Two navi agents
+// are deliberately NOT here: goose and wisp are not herdr kinds
+// (herdr 0.9.5's kind list has neither), so `agent start` cannot
+// run them — they live in a plain terminal pane instead.
+//
+// The flow (verified live against herdr 0.9.5, 2026-11-12):
+//   1. Find a pane to split from — any pane in any workspace; the
+//      split creates a NEW pane at a shell prompt and never disturbs
+//      the source. No workspace at all: `herdr workspace create`
+//      returns its root pane directly (result.root_pane.pane_id).
+//   2. `herdr pane split <pane> --direction right` → the new pane
+//      id comes back as result.pane.pane_id.
+//   3. `herdr agent start <name> --kind <kind> --pane <pane>`
+//      waits for interactive readiness (the CLI's own --timeout,
+//      60 s here for slow machines) and returns result.agent.
+//   4. Halo jumps to Chat with the new agent selected.
+// Names are auto-assigned `<kind>-<n>` (first free n) — the user
+// never types a name to spawn.
+
+const SPAWNABLE_KINDS: { kind: string; blurb: string }[] = [
+  { kind: 'opencode', blurb: "navi's terminal agent" },
+  { kind: 'omp', blurb: 'oh-my-pi' },
+  { kind: 'hermes', blurb: "Lain's engine (Nous)" },
+  { kind: 'pi', blurb: 'the pi agent' },
+  { kind: 'codex', blurb: "OpenAI's Codex" },
+];
+
+/** The agent-start wait can outlast the 5 s list-call timeout, so
+ * the spawn path runs its herdr calls with a 90 s ceiling. */
+function runHerdrLong(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile('herdr', args, { timeout: 90000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        resolve({ code: -1, stdout: '', stderr: 'herdr not found on PATH' });
+        return;
+      }
+      resolve({
+        code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+        stdout: String(stdout ?? ''),
+        stderr: String(stderr ?? ''),
+      });
+    });
+  });
+}
+
+async function binaryOnPath(exe: string): Promise<boolean> {
+  const res = await new Promise<{ code: number }>((resolve) => {
+    execFile('sh', ['-c', `command -v ${exe} >/dev/null 2>&1`], (err) => {
+      resolve({ code: err ? 1 : 0 });
+    });
+  });
+  return res.code === 0;
+}
+
+/** navi's default agent (the agent center's `~/.config/navi/
+ * default-agent`, whitelisted to known harness binaries) mapped to
+ * a herdr kind when it has one — wisp and goose do not, so they
+ * yield '' and the dropdown falls back to its first kind. */
+export function defaultAgentKind(): string {
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), '.config', 'navi', 'default-agent'), 'utf8').trim();
+    const base = raw.split('/').pop() ?? '';
+    if (SPAWNABLE_KINDS.some((k) => k.kind === base)) return base;
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+export async function listSpawnableAgents(): Promise<{ kinds: SpawnableAgent[]; defaultKind: string }> {
+  const kinds: SpawnableAgent[] = [];
+  for (const k of SPAWNABLE_KINDS) {
+    kinds.push({ ...k, installed: await binaryOnPath(k.kind) });
+  }
+  return { kinds, defaultKind: defaultAgentKind() };
+}
+
+function firstJsonObject(stdout: string): Record<string, unknown> | null {
+  try {
+    return asRecord(JSON.parse(stdout));
+  } catch {
+    return null;
+  }
+}
+
+function envelopeResult(stdout: string): Record<string, unknown> | null {
+  const outer = firstJsonObject(stdout);
+  if (!outer) return null;
+  return asRecord(outer.result);
+}
+
+/** Find a pane to split from, or create a workspace and return its
+ * root pane. Returns the pane id to split from, or the root pane id
+ * to start in directly (startDirect). */
+async function findSpawnPane(
+  cwd: string,
+): Promise<{ paneId: string; startDirect: boolean; problem: string }> {
+  const ws = await runHerdr(['workspace', 'list']);
+  if (ws.code === -1) return { paneId: '', startDirect: false, problem: 'herdr is not installed (not on PATH).' };
+  if (ws.code === 0) {
+    const result = envelopeResult(ws.stdout);
+    const list = Array.isArray(result?.workspaces) ? result.workspaces : [];
+    if (list.length > 0) {
+      const panes = await runHerdr(['pane', 'list']);
+      if (panes.code === 0) {
+        const presult = envelopeResult(panes.stdout);
+        const paneList = Array.isArray(presult?.panes) ? presult.panes : [];
+        // Prefer a bare shell pane (no agent attached); any pane
+        // splits fine, so fall back to the first one listed.
+        const bare = paneList.map((p) => asRecord(p)).find((p) => p && !asString(p.agent));
+        const any = paneList.map((p) => asRecord(p)).find((p) => p && asString(p.pane_id));
+        const id = asString(bare?.pane_id) || asString(any?.pane_id);
+        if (id) return { paneId: id, startDirect: false, problem: '' };
+      }
+      // A workspace exists but its panes could not be listed — the
+      // focused workspace's first pane is <id>:p1 by construction.
+      const first = asRecord(list[0]);
+      const wsId = asString(first?.workspace_id);
+      if (wsId) return { paneId: `${wsId}:p1`, startDirect: false, problem: '' };
+    }
+  }
+  // No workspace: create one. The root pane is a fresh shell.
+  const created = await runHerdrLong(['workspace', 'create', '--cwd', cwd, '--label', 'halo']);
+  if (created.code !== 0) {
+    return {
+      paneId: '',
+      startDirect: false,
+      problem: `Could not create a herdr workspace: ${(created.stderr || created.stdout).trim() || `exit ${created.code}`}`,
+    };
+  }
+  const result = envelopeResult(created.stdout);
+  const root = asRecord(result?.root_pane);
+  const id = asString(root?.pane_id);
+  if (!id) return { paneId: '', startDirect: false, problem: 'herdr created a workspace but reported no root pane.' };
+  return { paneId: id, startDirect: true, problem: '' };
+}
+
+export async function spawnAgent(kind: string, cwd: string): Promise<SpawnResult> {
+  const k = (kind ?? '').trim();
+  if (!SPAWNABLE_KINDS.some((x) => x.kind === k)) {
+    return { ok: false, name: '', paneId: '', problem: `'${k}' is not a kind Halo can spawn — goose and wisp run from a terminal pane, not herdr.` };
+  }
+  const st = await detectHerdr();
+  if (!st.installed) {
+    return { ok: false, name: '', paneId: '', problem: 'herdr is not installed (not on PATH).' };
+  }
+  const home = (cwd ?? '').trim() || os.homedir();
+  const pane = await findSpawnPane(home);
+  if (pane.problem) return { ok: false, name: '', paneId: '', problem: pane.problem };
+  let targetPane = pane.paneId;
+  if (!pane.startDirect) {
+    const split = await runHerdrLong(['pane', 'split', targetPane, '--direction', 'right']);
+    if (split.code !== 0) {
+      return {
+        ok: false,
+        name: '',
+        paneId: '',
+        problem: `Could not split a pane: ${(split.stderr || split.stdout).trim() || `exit ${split.code}`}`,
+      };
+    }
+    const result = envelopeResult(split.stdout);
+    const newPane = asRecord(result?.pane);
+    const id = asString(newPane?.pane_id);
+    if (!id) return { ok: false, name: '', paneId: '', problem: 'herdr split a pane but reported no new pane id.' };
+    targetPane = id;
+  }
+  // First free <kind>-<n> name. The renderer's HerdrAgent drops the
+  // raw `name` (it only keeps paneId/label/status), so the taken
+  // names are read from the raw envelope here, not from detectHerdr.
+  let n = 1;
+  const taken = new Set<string>();
+  const listRes = await runHerdr(['agent', 'list']);
+  if (listRes.code === 0) {
+    try {
+      const outer = JSON.parse(listRes.stdout) as { result?: { agents?: { name?: unknown }[] } };
+      for (const a of outer.result?.agents ?? []) {
+        if (typeof a.name === 'string') taken.add(a.name);
+      }
+    } catch {
+      // Unparseable list — fall back to n=1 and let herdr report
+      // a clash if the name is taken.
+    }
+  }
+  while (taken.has(`${k}-${n}`)) n += 1;
+  const name = `${k}-${n}`;
+  const started = await runHerdrLong(['agent', 'start', name, '--kind', k, '--pane', targetPane, '--timeout', '60000']);
+  if (started.code !== 0) {
+    const err = (started.stderr || started.stdout).trim().slice(0, 300) || `exit ${started.code}`;
+    return { ok: false, name: '', paneId: '', problem: `Could not start ${k}: ${err}` };
+  }
+  const result = envelopeResult(started.stdout);
+  const agent = asRecord(result?.agent);
+  const paneId = asString(agent?.pane_id) || targetPane;
+  return { ok: true, name, paneId, problem: '' };
 }
 
 /** Read an agent's recent pane output as plain text. */

@@ -27,7 +27,7 @@ body {
   font-size: 14px;
 }
 
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 
 .shell { display: flex; height: 100%; }
 
@@ -200,6 +200,47 @@ button, input, select { font: inherit; color: inherit; }
 .forge-btn:hover { border-color: var(--pink); color: #fff; }
 .forge-btn.active { color: #fff; border-color: var(--pink); background: rgba(255, 16, 240, 0.10); }
 .forge-btn svg { flex: 0 0 auto; }
+/* Connection dot: steady glow, never flashing — green is signed in,
+ * amber is installed but not signed in, grey is not installed. Sits
+ * at the button's left edge so it survives the narrow layout. */
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--dim); }
+.conn-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.conn-dot.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.conn-dot.grey { background: var(--dim); opacity: 0.5; }
+/* Narrow sidebar (under 260px): the forge buttons go icons-only and
+ * the rows ellipsize instead of spilling out of view. The sidebar
+ * carries data-narrow from the measured width in App.tsx. */
+.sidebar[data-narrow="true"] .forge-btn { gap: 4px; padding: 7px 2px; }
+.sidebar[data-narrow="true"] .forge-btn .f-label { display: none; }
+.trail-row .t-title, .trail-row .t-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The dot inside a Settings note line is inline text, not a flex
+ * item — it needs its own display + spacing there. */
+.note .conn-dot { display: inline-block; vertical-align: middle; margin-right: 6px; }
+/* Notes sidebar button — same row shape as the forge buttons. */
+.notes-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; margin-top: 8px; background: transparent; border: 1px solid transparent; border-radius: 8px; color: var(--dim); cursor: pointer; text-align: left; font-size: 14px; }
+.notes-btn:hover { border-color: var(--pink); color: #fff; }
+.notes-btn.active { color: #fff; border-color: var(--pink); background: rgba(255, 16, 240, 0.10); }
+/* Notes main view: list left, detail (or editor) right. */
+.notes-view { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.notes-list { width: 300px; flex: 0 0 300px; border-right: 1px solid var(--line); padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.notes-tools { display: flex; gap: 6px; }
+.notes-tools input[type="text"] { flex: 1; min-width: 0; background: var(--bg-raise); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+.notes-tools input[type="text"]:focus { outline: none; border-color: var(--pink); }
+.note-row { display: block; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.note-row:hover { border-color: var(--pink); }
+.note-row.active { border-color: var(--pink); background: rgba(255, 16, 240, 0.10); }
+.note-row .t-title, .note-row .t-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-detail { flex: 1; min-width: 0; padding: 16px 20px; overflow-y: auto; }
+.notes-detail h3 { margin: 0 0 8px; font-size: 20px; }
+.note-editor { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
+.note-editor label { display: flex; flex-direction: column; gap: 6px; color: var(--dim); font-size: 13px; }
+.note-editor input[type="text"], .note-editor select, .note-editor textarea { width: 100%; background: var(--bg-raise); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: #fff; }
+.note-editor textarea { min-height: 200px; resize: vertical; }
+.note-editor input:focus, .note-editor select:focus, .note-editor textarea:focus { outline: none; border-color: var(--pink); }
+/* Spawn row inside the Agents popover: kind select + Spawn button. */
+.spawn-row { display: flex; gap: 6px; margin: 4px 0; }
+.spawn-row select { flex: 1; min-width: 0; background: var(--bg-raise); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
+.spawn-row select:focus { outline: none; border-color: var(--pink); }
 /* Branch status under a GitHub repo group: branch · ahead/behind ·
  * dirty count, from local git. Read-only. */
 .gh-status { color: var(--dim); font-size: 12px; margin: 2px 8px 6px; }
@@ -358,14 +399,15 @@ button, input, select { font: inherit; color: inherit; }
 .settings h3 { margin: 22px 0 8px; }
 .settings h3:first-child { margin-top: 0; }
 .settings label { display: block; color: var(--dim); font-size: 12px; margin: 10px 0 4px; }
-.settings input[type="text"], .settings input[type="password"], .settings select {
+.settings input[type="text"], .settings input[type="password"], .settings select, .settings textarea {
   width: 100%;
   background: var(--bg-raise);
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 8px 10px;
 }
-.settings input:focus, .settings select:focus { outline: none; border-color: var(--pink); }
+.settings textarea { min-height: 64px; resize: vertical; }
+.settings input:focus, .settings select:focus, .settings textarea:focus { outline: none; border-color: var(--pink); }
 .settings .note { color: var(--dim); font-size: 12px; margin: 6px 0 0; }
 .settings .note.warn { color: var(--amber); }
 .repo-row, .agent-row {

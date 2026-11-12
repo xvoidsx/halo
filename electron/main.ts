@@ -2,9 +2,20 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, settingsPath } from './settingsFile.js';
+import { getConnections, installTool } from './connections.js';
 import { getIssue, getPR, listGitHub } from './githubAdapter.js';
 import { getLinearIssue, listLinear } from './linearAdapter.js';
-import { detectHerdr, getTrail, listTrails, readAgentOutput, sendAgentMessage, watchTrail } from './herdrAdapter.js';
+import {
+  detectHerdr,
+  getTrail,
+  listSpawnableAgents,
+  listTrails,
+  readAgentOutput,
+  sendAgentMessage,
+  spawnAgent,
+  watchTrail,
+} from './herdrAdapter.js';
+import { createNote, getNote, listNotes, listNotionDatabases } from './notesAdapter.js';
 import { TerminalManager } from './terminal.js';
 import type { HaloSettings } from '../src/types.js';
 
@@ -117,16 +128,47 @@ app.whenReady().then(() => {
   ipcMain.handle('halo:getPR', (_e, repo: string, number: number) => getPR((repo ?? '').trim(), number));
   ipcMain.handle('halo:getIssue', (_e, repo: string, number: number) => getIssue((repo ?? '').trim(), number));
 
-  // Linear: issues + comments, from the `linear` connector CLI (see
-  // linearAdapter.ts). Read-only — the connector's first grant is
-  // read-only, and Halo only ever calls read tools.
-  ipcMain.handle('halo:listLinear', () => listLinear(loadSettings().linear.team));
-  ipcMain.handle('halo:getLinearIssue', (_e, id: string) => getLinearIssue((id ?? '').trim()));
+  // Linear: issues + comments, from the `linear` connector CLI first
+  // and the personal API key second (see linearAdapter.ts). Read-only
+  // — the connector's first grant is read-only, and Halo only ever
+  // calls read tools.
+  ipcMain.handle('halo:listLinear', () => listLinear(loadSettings().linear.team, loadSettings().linear.apiKey));
+  ipcMain.handle('halo:getLinearIssue', (_e, id: string) =>
+    getLinearIssue((id ?? '').trim(), loadSettings().linear.apiKey),
+  );
+
+  // Connections: per-forge health probes + the one-path installer
+  // (download archive + checksums, verify, extract to ~/.local/bin —
+  // no install scripts, ever). See connections.ts.
+  ipcMain.handle('halo:getConnections', () =>
+    getConnections(loadSettings().linear.apiKey, loadSettings().notes.notionToken),
+  );
+  ipcMain.handle('halo:installTool', (_e, tool: string) =>
+    installTool(tool === 'gh' || tool === 'entire' || tool === 'ntn' ? tool : 'gh'),
+  );
+
+  // Notes: Notion (connector or integration token) + an Obsidian
+  // vault on disk. See notesAdapter.ts.
+  ipcMain.handle('halo:listNotes', (_e, query?: string) => listNotes(loadSettings().notes, query ?? ''));
+  ipcMain.handle('halo:getNote', (_e, id: string) => getNote((id ?? '').trim(), loadSettings().notes));
+  ipcMain.handle('halo:createNote', (_e, target: string, title: string, body: string) =>
+    createNote(target === 'obsidian' ? 'obsidian' : 'notion', title ?? '', body ?? '', loadSettings().notes),
+  );
+  ipcMain.handle('halo:listNotionDatabases', () => listNotionDatabases(loadSettings().notes));
 
   // Herdr: real detection via the herdr CLI; trail watching is a stub
   // until `entire trail watch --json` streaming lands.
   ipcMain.handle('halo:herdrStatus', () => detectHerdr());
   ipcMain.handle('halo:watchTrail', (_e, id: string) => watchTrail(id));
+
+  // Spawning: the Agents dropdown offers the herdr kinds navi ships
+  // (see herdrAdapter.ts) and starts one in a fresh pane.
+  ipcMain.handle('halo:getSpawnableAgents', () => listSpawnableAgents());
+  ipcMain.handle('halo:spawnAgent', (_e, kind: string) => {
+    const settings = loadSettings();
+    const cwd = settings.repos[0]?.path ?? '';
+    return spawnAgent((kind ?? '').trim(), cwd);
+  });
 
   // Agent chat: send + read by pane_id. Errors surface honestly — the
   // chat never invents a reply. Not yet verified on a machine with

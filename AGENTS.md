@@ -615,6 +615,113 @@ what to build, where things live, and the lessons that apply here.
   "agents, issues, one live view" — Raven picked "your workspace,
   one live view", shipped as 0.10.1 (sidebar tagline + the README /
   AGENTS.md one-liners, which now name all four forges).
+- **0.11.0 — connections, dual transports, notes, spawn (2026-11-12).**
+  Raven's brief: frictionless setup — the user should never have to
+  figure out which CLI is missing or how to sign in. Four pieces,
+  all approved in one message (dual transports included, "use your
+  best judgment", aesthetics latitude granted), plus his agents
+  dropdown idea folded in.
+  - **Connection dots** (`electron/connections.ts`, `getConnections`
+    over `Promise.all`): every forge button carries a steady dot —
+    green (present + authed), amber (present, not authed), grey (not
+    installed) — steady glow, never flashing (flashing reads as an
+    alarm). Same dot + a plain status line in each forge's Settings
+    section. Probes: `gh auth status` (exit 0 + parse the account),
+    `entire auth status --json` (exit 0 + `user` string or the
+    `current` entry of `sessions[]` — the --json shape is ASSUMED,
+    docs-described only, so any exit-0 JSON counts as signed in),
+    Linear = connector `list_issues {limit: 1}` else GraphQL
+    `viewer`, Notion = connector `notion-get-self` else REST
+    `/users/me`, herdr = `detectHerdr()`.
+  - **Installers — download + verify, never execute a script.**
+    One code path for gh + entire: `resolveLatestTag` (GitHub
+    releases/latest), download the archive + its checksums file,
+    sha256-verify against the published checksums (refuses on a
+    mismatch or a missing entry), extract with system `tar`, copy the
+    binary to `~/.local/bin` (chmod 755). gh from
+    api.github.com/cli/cli (latest v2.103.3, tarball layout
+    `gh_<ver>_linux_<arch>/bin/gh`); entire from install.entire.com
+    (`v<version>/entire_<os>_<arch>.tar.gz` + checksums.txt, same
+    origin as their install.sh uses — plus the GitHub releases
+    fallback origin), installing `entire` + `git-remote-entire`.
+    ntn is `npm install -g ntn` (0.23.29 on npm). No sudo anywhere.
+    `opts.version`/`opts.base` overrides exist so the install test
+    can drive them against a fixture server — use them, never a live
+    release, in tests.
+  - **Connect** is a setup terminal pane running the login command
+    (`gh auth login`, `entire login`) — Halo already spawns
+    terminals, so no custom per-vendor OAuth window — re-probing when
+    the pane exits. Halo never asks for credentials itself.
+  - **Dual transports.** Every forge has two: the CLI when present
+    (existing login, zero new secrets), an API key/token from
+    Settings when not. Linear: personal key (`lin_api_...`, from
+    linear.app/settings/api, stored in settings.json 0600) → POST
+    https://api.linear.app/graphql with the key RAW as the
+    `Authorization` header (no `Bearer `) — GraphQL returns HTTP 200
+    even on failures, so `.errors` is always checked. Notion:
+    integration token → https://api.notion.com/v1 with `Bearer` +
+    `Notion-Version: 2022-06-28` on EVERY request (do NOT use
+    2025-09-03 — intermittent 401s on POST/PATCH); an integration
+    only sees pages/databases explicitly shared with it, so a 404
+    almost always means a missing share. **Normalization lives in
+    one place:** `normalizeApiIssue` swaps the API's UUID `id` +
+    `identifier` into the connector's `id` + `uuid` AND flattens
+    `state {name, type}` into `status`/`statusType`; `mapComment`
+    accepts `author` (connector) or `user` (API). Both were missing
+    until the mock-API test caught them — the connector path had
+    masked both. **Connector write tools are never called** (their
+    argument names are unverified from `list-tools` alone) — all
+    Notion writes go through the REST API.
+  - **Notes** (`electron/notesAdapter.ts`, own sidebar section +
+    main view, NOT a fourth forge): Notion (connector search/recent
+    first, API search second when a token is set) + Obsidian vault
+    (top-level `*.md`, mtime desc, limit 20), merged newest-first.
+    Detail: Obsidian reads the file (path traversal rejected);
+    Notion without a token returns the thin '(Notion page)' + the
+    token hint (the detail effect keeps a note's accompanying
+    detail — it used to clear it on any successful fetch, which hid
+    exactly this hint). Create: Notion → `createNotionPageApi`
+    (reads the database schema for the title property's NAME, never
+    guesses it; body lines → paragraph blocks); Obsidian → writes
+    `<slug>.md` (0600, `-2` dedupe). Obsidian titles in the list are
+    filename slugs, same as existing vault files.
+  - **Spawn** (`electron/herdrAdapter.ts`, `SPAWNABLE_KINDS`):
+    opencode / omp / hermes / pi / codex — the kinds herdr 0.9.5 can
+    start that navi ships. `binaryOnPath` (`command -v`) filters to
+    installed only; `defaultAgentKind()` reads
+    `~/.config/navi/default-agent` and pre-selects it when it IS one
+    of the five (wisp/goose map to '' — they are NOT herdr kinds, so
+    they are honestly excluded with a note, never listed).
+    `findSpawnPane` prefers a bare pane (no `agent` key), else any
+    pane; no workspace → create one and start direct in its root
+    pane. `spawnAgent` names the first free `<kind>-<n>` (names read
+    from the raw `agent list` envelope — the renderer's HerdrAgent
+    drops the raw `name`, so the taken-names set is parsed here),
+    splits unless starting direct, `agent start --timeout 60000`,
+    returns the pane_id; the popover jumps to Chat with it.
+  - **Tests (all new in 0.11.0):** `scripts/api-transport-test.mjs`
+    (node-side mock servers, 18 checks — the one that caught the
+    state-flattening + comment-author bugs), `scripts/install-test.mjs`
+    (node-side fixture server + throwaway HOME, 9 checks incl. the
+    tampered-tarball refusal), `scripts/connections-test.mjs` (9
+    checks: dots, status lines, Install/Connect absence while
+    connected, dark textareas, narrow icons-only + ellipsis),
+    `scripts/notes-test.mjs` (7 checks), `scripts/spawn-test.mjs`
+    (6 checks, cleans up its spawned pane). New fakes: `gh auth
+    status`, `entire auth status --json`, and a whole fake
+    `notion-cli` (real get-self / recent-pages shapes). **Fake
+    binaries must be +x** — the notion-cli fake shipped 644 and the
+    Notion probe read "notion-cli exited 1" until it was chmodded.
+  - **Test traps from this round:** an ellipsized element's
+    `scrollWidth` is STILL the full text width — asserting
+    `scrollWidth <= clientWidth` fails on a correctly-clipped title;
+    assert the bounding rect stays inside the sidebar instead. The
+    sandbox has `codex` on PATH (/opt/hatch-image/bin), so the spawn
+    test expects opencode/pi/codex installed, omp/hermes missing —
+    the installed set is machine-dependent, assert what the machine
+    has. The chat-list timing flake recurred once on `attachRenders`
+    in this suite and passed on immediate re-run (known, no code
+    change).
 - **Rig spec correction (2026-11-12).** The intended herdr rig is
   THREE agents — fakepi on w1:p1, fakepi2, opencode-test — because
   chat-list-test requires a fakepi2 agent (it asserts row 2 and sends
