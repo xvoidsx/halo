@@ -28,6 +28,12 @@
 // stopped reading the selected agent). The same rule covers any pane
 // another terminal holds an attach to (see skipReadPaneIds).
 //
+// The attach stays alive across tab switches: App keeps this view
+// mounted once visited and hides it instead of unmounting it, so the
+// terminal — and its scrollback — is still there when you come back.
+// The poller keeps running while hidden, so previews and dots stay
+// fresh on other tabs too.
+//
 // Nothing is fabricated: the terminal shows the agent's real pane, and
 // previews are the pane's real last line. If a read fails, the row
 // simply keeps its herdr status and no dot is raised.
@@ -87,6 +93,8 @@ export default function ChatView({
   onPickAgent,
   skipReadPaneIds,
   onAttachState,
+  onExitState,
+  reconnectSignal,
 }: {
   herdr: HerdrState | null;
   activePaneId: string | null;
@@ -95,6 +103,11 @@ export default function ChatView({
    * other terminal — the poller must not `agent read` those. */
   skipReadPaneIds: string[];
   onAttachState: (paneId: string, attached: boolean) => void;
+  /** Reports when the chat attach's shell exits (and comes back) —
+   * the parent counts it for "Reconnect all". */
+  onExitState: (paneId: string, dead: boolean) => void;
+  /** Bumps when the parent wants every dead pane re-spawned. */
+  reconnectSignal: number;
 }) {
   const agents = herdr?.agents ?? [];
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
@@ -261,6 +274,8 @@ export default function ChatView({
                 command: `herdr agent attach ${selected.paneId}`,
               }}
               onAttachState={onAttachState}
+              onExitState={onExitState}
+              reconnectSignal={reconnectSignal}
             />
           </Suspense>
         </div>

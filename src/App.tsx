@@ -427,6 +427,21 @@ export default function App() {
   // TUI in one. Panes mount on first visit and stay alive across tabs.
   const [termPanes, setTermPanes] = useState<TermPane[]>([{ id: 'pane-home', title: 'shell', cwd: '' }]);
   const [termMounted, setTermMounted] = useState(false);
+  // The chat view mounts on first visit and stays alive across tabs,
+  // hidden instead of unmounted — the attach keeps its pty and its
+  // scrollback when you switch away and back. Same shape as the
+  // terminal panes above.
+  const [chatMounted, setChatMounted] = useState(false);
+  // Pane ids whose shell has exited (terminal panes and the chat
+  // attach alike) — the sidebar counts them for "Reconnect all".
+  const [deadPanes, setDeadPanes] = useState<string[]>([]);
+  const onExitState = useCallback((paneId: string, dead: boolean) => {
+    setDeadPanes((prev) =>
+      dead ? (prev.includes(paneId) ? prev : [...prev, paneId]) : prev.filter((p) => p !== paneId),
+    );
+  }, []);
+  // Bumps when the user asks every dead pane to re-spawn at once.
+  const [reconnectAllSignal, setReconnectAllSignal] = useState(0);
   // Split shares: one fraction per pane, summing to 1. Dragging a
   // divider moves share between its two neighbours (min 10% each).
   const [termSizes, setTermSizes] = useState<number[]>([1]);
@@ -468,6 +483,10 @@ export default function App() {
 
   useEffect(() => {
     if (view === 'terminal') setTermMounted(true);
+  }, [view]);
+
+  useEffect(() => {
+    if (view === 'chat') setChatMounted(true);
   }, [view]);
 
   const addTermPane = useCallback((command?: string, title?: string) => {
@@ -604,6 +623,15 @@ export default function App() {
           {herdr ? (herdr.installed ? `herdr · ${herdr.agents.length} agent${herdr.agents.length === 1 ? '' : 's'}` : 'herdr not detected') : 'herdr…'}
           <span className="foot-refresh"> ↻</span>
         </button>
+        {deadPanes.length > 0 && (
+          <button
+            className="reconnect-all"
+            onClick={() => setReconnectAllSignal((s) => s + 1)}
+            title="Re-spawn every terminal pane whose shell has exited — after a herdr restart, this brings them all back at once"
+          >
+            ↻ Reconnect all ({deadPanes.length})
+          </button>
+        )}
       </aside>
 
       <main className="main">
@@ -633,14 +661,18 @@ export default function App() {
         </div>
         {view === 'trail' && selected && <TrailView trail={selected} />}
         {view === 'trail' && !selected && <TrailsEmpty onOpenTerminal={() => setView('terminal')} />}
-        {view === 'chat' && (
-          <ChatView
-            herdr={herdr}
-            activePaneId={settings.activeAgentPaneId}
-            onPickAgent={(paneId) => setSettings((s) => ({ ...s, activeAgentPaneId: paneId }))}
-            skipReadPaneIds={attachedPanes}
-            onAttachState={onAttachState}
-          />
+        {chatMounted && (
+          <div className={`chat-view ${view === 'chat' ? '' : 'hidden'}`}>
+            <ChatView
+              herdr={herdr}
+              activePaneId={settings.activeAgentPaneId}
+              onPickAgent={(paneId) => setSettings((s) => ({ ...s, activeAgentPaneId: paneId }))}
+              skipReadPaneIds={attachedPanes}
+              onAttachState={onAttachState}
+              onExitState={onExitState}
+              reconnectSignal={reconnectAllSignal}
+            />
+          </div>
         )}
         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} />}
         {termMounted && (
@@ -677,6 +709,8 @@ export default function App() {
                       onClose={termPanes.length > 1 ? () => closeTermPane(p.id) : undefined}
                       style={{ flexGrow: termSizes[i] ?? 1, flexBasis: 0 }}
                       onAttachState={onAttachState}
+                      onExitState={onExitState}
+                      reconnectSignal={reconnectAllSignal}
                     />
                   </Fragment>
                 ))}

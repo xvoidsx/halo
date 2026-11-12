@@ -52,8 +52,16 @@ const send = (method, params = {}) =>
 await new Promise((r) => {
   ws.onopen = r;
 });
+// Start from a known state: reload the page so no panes from an
+// earlier run are still mounted (the chat attach now survives tab
+// switches, so a warm instance is NOT a fresh one). The main process
+// kills orphaned ptys when the renderer goes away, so the reload is
+// safe — a new attach works right after.
+await send('Page.enable');
+await send('Page.reload');
+await sleep(6000); // let the app reload and herdrStatus() land
 await send('Runtime.enable');
-await sleep(4000); // let herdrStatus() land
+await sleep(2000);
 
 const expr = `(async () => {
   const q = (s) => document.querySelector(s);

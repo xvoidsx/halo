@@ -53,6 +53,8 @@ export default function TerminalPanel({
   onClose,
   style,
   onAttachState,
+  onExitState,
+  reconnectSignal,
 }: {
   pane: TermPane;
   onClose?: () => void;
@@ -62,6 +64,12 @@ export default function TerminalPanel({
    * pane — a pane with a live attach must not be `agent read` at the
    * same time (the read kills the attach; see below). */
   onAttachState?: (paneId: string, attached: boolean) => void;
+  /** Tells the parent when this pane's shell has exited, and when it
+   * comes back — the parent counts dead panes for "Reconnect all". */
+  onExitState?: (paneId: string, dead: boolean) => void;
+  /** Bumps when the parent wants every dead pane re-spawned. A pane
+   * only answers when it is actually dead — a live pane ignores it. */
+  reconnectSignal?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState('Starting terminal…');
@@ -117,11 +125,21 @@ export default function TerminalPanel({
       // No WebGL on this machine — the default canvas renderer is used.
       webgl = null;
     }
-    try {
-      fit.fit();
-    } catch {
-      // Layout not ready yet; a resize will fit it.
-    }
+    // Never fit a hidden pane to zero. A tab that is mounted but
+    // hidden (display:none — the chat attach stays alive across tab
+    // switches) has a 0-size host; fitting it would shrink the pty to
+    // a couple of columns, and a TUI agent reflows — or, at 20x5,
+    // segfaults — on that. Leave the pty's size alone until the pane
+    // is visible again; the observer fires then and the fit lands.
+    const fitIfVisible = () => {
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
+      try {
+        fit.fit();
+      } catch {
+        // Layout not ready yet; a resize will fit it.
+      }
+    };
+    fitIfVisible();
 
     const offData = window.halo.onTermData((ev) => {
       if (ev.id === termId) term.write(ev.data);
@@ -130,6 +148,7 @@ export default function TerminalPanel({
       if (ev.id === termId) {
         setAttached(false);
         setDeadCode(ev.code);
+        onExitState?.(pane.id, true);
         setStatus(`Shell exited (code ${ev.code}).`);
       }
     });
@@ -157,11 +176,7 @@ export default function TerminalPanel({
       }, RESIZE_SETTLE_MS);
     });
     const observer = new ResizeObserver(() => {
-      try {
-        fit.fit();
-      } catch {
-        // Terminal is going away; ignore.
-      }
+      fitIfVisible();
     });
     observer.observe(host);
 
@@ -180,6 +195,7 @@ export default function TerminalPanel({
         termId = res.id;
         setAttached(true);
         setDeadCode(null);
+        onExitState?.(pane.id, false);
         setStatus(res.detail);
         term.focus();
       })
@@ -196,6 +212,9 @@ export default function TerminalPanel({
       offData();
       offExit();
       setAttached(false);
+      // The pane is going away (closed, or the chat target changed) —
+      // it is no longer a dead pane the parent should count.
+      onExitState?.(pane.id, false);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       if (termId) void window.halo?.termKill(termId);
       try {
@@ -207,6 +226,21 @@ export default function TerminalPanel({
       term.dispose();
     };
   }, [pane.id, pane.cwd, pane.command, spawnNonce]);
+
+  // "Reconnect all" from the parent: re-spawn this pane, but only if
+  // it is actually dead. The effect runs only when the signal changes,
+  // so a pane that dies later does not auto-reconnect — the button is
+  // a deliberate act, not a standing order. deadCode is read from the
+  // latest render's closure when the signal changes.
+  useEffect(() => {
+    if (reconnectSignal !== undefined && reconnectSignal > 0 && deadCode !== null) {
+      setDeadCode(null);
+      setStatus('Starting terminal…');
+      setSpawnNonce((n) => n + 1);
+    }
+    // Deliberately only on the signal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconnectSignal]);
 
   return (
     <div className="terminal-wrap" style={style}>

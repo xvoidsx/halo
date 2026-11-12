@@ -171,6 +171,21 @@ button, input, select { font: inherit; color: inherit; }
 }
 .sidebar-foot:hover { color: var(--text); }
 .sidebar-foot .foot-refresh { color: var(--cyan); }
+/* Reconnect all — appears in the sidebar when any pane's shell has
+   exited (e.g. after a herdr restart). One click re-spawns them all. */
+.reconnect-all {
+  margin: 8px 12px 12px;
+  padding: 8px 12px;
+  background: none;
+  border: 1px solid var(--pink);
+  color: var(--pink);
+  border-radius: 999px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+.reconnect-all:hover { box-shadow: 0 0 10px rgba(255, 16, 240, 0.4); }
 .status-light { margin-right: 6px; }
 .status-light.green { color: var(--green); }
 .status-light.amber { color: var(--amber); }
@@ -394,6 +409,11 @@ button, input, select { font: inherit; color: inherit; }
 /* The list rows live here; the chat's right side is a live attached
    terminal (.chat-terminal below), not a text log — a TUI agent's
    screen is not a conversation (see ChatView.tsx). */
+/* The chat view stays mounted once visited and hides instead of
+   unmounting, so the attach keeps its pty and scrollback across tab
+   switches (see App.tsx). */
+.chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.chat-view.hidden { display: none; }
 .chat-terminal { flex: 1; display: flex; min-width: 0; }
 
 /* --- Chat list — the agent center's jump-in list, as a GUI --- */

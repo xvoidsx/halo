@@ -156,7 +156,10 @@ export class TerminalManager {
     return { ok: true, detail: '' };
   }
 
-  /** Kill every live shell. Called on quit so no shell outlives Halo. */
+  /** Kill every live shell. Called on quit so no shell outlives Halo,
+   * and when the renderer goes away (reload, crash, closed window) so
+   * a dead renderer never leaves an orphaned `herdr agent attach`
+   * holding a pane its replacement cannot attach to. */
   killAll(): void {
     for (const id of [...this.terms.keys()]) this.kill(id);
   }

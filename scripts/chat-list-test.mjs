@@ -46,8 +46,16 @@ const send = (method, params = {}) => new Promise((resolve) => {
   ws.send(JSON.stringify({ id, method, params }));
 });
 await new Promise((r) => { ws.onopen = r; });
+// Start from a known state: reload the page so no panes from an
+// earlier run are still mounted (the chat attach now survives tab
+// switches, so a warm instance is NOT a fresh one). The main process
+// kills orphaned ptys when the renderer goes away, so the reload is
+// safe — a new attach works right after.
+await send('Page.enable');
+await send('Page.reload');
+await sleep(6000); // let the app reload and herdrStatus() land
 await send('Runtime.enable');
-await sleep(4000); // let herdrStatus() land
+await sleep(2000);
 
 const expr = `(async () => {
   const q = (s) => document.querySelector(s);
@@ -153,9 +161,11 @@ const expr = `(async () => {
 const res = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
 const val = res.result?.result?.value ?? {};
 console.log(JSON.stringify(val, null, 2));
+// The rig may carry a third agent (opencode-test) — the list just
+// has to show the live agents, fakepi first, fakepi2 second.
 const pass =
-  (val.chip ?? '').includes('2 live') &&
-  val.rowCount === 2 &&
+  (val.chip ?? '').includes('live') &&
+  (val.rowCount ?? 0) >= 2 &&
   val.listHeading === true &&
   val.noTextLog === true &&
   (val.rowTexts?.[0] ?? '').includes('fakepi') &&

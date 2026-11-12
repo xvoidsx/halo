@@ -138,6 +138,47 @@ what to build, where things live, and the lessons that apply here.
   the last pane's share; closing hands the closed pane's share to its
   neighbour. The panes reflow through the same ResizeObserver → fit
   path, so the debounced resize keeps the pty in step.
+
+## Agent chat — keep-alive + Reconnect all (0.6.0)
+
+- **The chat attach stays alive across tab switches.** ChatView
+  mounts on first visit and is hidden (display:none) instead of
+  unmounted when you leave the tab — the same shape the Terminal tab
+  already used for its panes. The attach keeps its pty and its
+  scrollback; coming back is returning, not relaunching. The poller
+  keeps running while hidden, so previews and dots stay fresh.
+- **Never fit a hidden pane to zero.** A display:none host is 0-size;
+  fitting it would shrink the pty to a couple of columns, and a TUI
+  agent reflows — or, at 20x5, segfaults — on that. Terminal.tsx's
+  fit runs only when the host has size (`fitIfVisible`), in both the
+  initial fit and the ResizeObserver callback. When the tab shows
+  again the observer fires and the fit lands.
+- **Reconnect all.** Every TerminalPanel reports its exit state up
+  (`onExitState(paneId, dead)` — true on exit, false on spawn and on
+  unmount, so a closed pane leaves the count). App counts dead panes
+  across tabs (terminal panes + the chat attach) and shows a sidebar
+  "↻ Reconnect all (N)" button while any are dead. Clicking it bumps
+  a `reconnectSignal` that each dead pane answers by re-spawning
+  itself — the same path as its own Reconnect button, driven by the
+  existing spawnNonce. A live pane ignores the signal, and a pane
+  that dies later does not auto-reconnect: the button is a deliberate
+  act, not a standing order.
+- **A dead renderer must not leave orphaned ptys.** The old panes
+  never run their cleanup — a reload tears the JS context down first,
+  a crash never runs it — so an orphaned `herdr agent attach` keeps
+  holding its pane and every new attach to it exits code 1
+  (double-attach). Main kills all ptys when the renderer goes away:
+  `did-start-loading` (a reload starts a new renderer),
+  `render-process-gone` (a crash), and `destroyed` (a closed window).
+  The fresh renderer re-spawns what it needs. Proven by the test
+  below: a reload used to poison the attach, now it does not.
+- **CDP tests reload the page first.** Keep-alive means a warm
+  instance is NOT a fresh one — a second run against the same instance
+  used to misidentify the shell/attach ptys and fail spuriously. Every
+  CDP test now starts with `Page.reload` (safe since the orphan fix)
+  and waits for the app to come back. The chat-list test is also
+  rig-agnostic on agent count now (it used to hardcode "2 live" /
+  rowCount 2 and failed on a 3-agent rig).
 - Agent messages in the chat are text actually read from the pane. If a
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —
@@ -277,7 +318,12 @@ what to build, where things live, and the lessons that apply here.
 - **Kill and relaunch in SEPARATE exec calls.** The kill exec's own text
   must not contain the target string anywhere else — one launch line
   with `npx electron` in the same command SIGKILLs your own shell
-  (seen 2026-11-11, 0.5.0).
+  (seen 2026-11-11, 0.5.0). The same trap bites inside ONE command:
+  a verification `grep` later in the pipeline whose pattern matches
+  the kill target kills the shell running the loop (seen 2026-11-11,
+  0.6.0 — a `grep "herdr agent attach"` after the kill loop). Keep
+  the kill exec free of the target string in EVERY stage, and verify
+  in a follow-up exec.
 - **Backslashes die inside template-literal CDP expressions.** A
   template literal in a `.mjs` test script eats `\d` in a regex before
   the expression reaches the page, so `/w\d+:p\d+/` becomes

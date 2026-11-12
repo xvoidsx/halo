@@ -11,7 +11,7 @@ const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 
 let win: BrowserWindow | null = null;
 
-function createWindow(): void {
+function createWindow(termManager: TerminalManager): void {
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -30,6 +30,20 @@ function createWindow(): void {
   } else {
     void win.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
   }
+
+  // A dead renderer must not leave orphaned ptys behind. The old
+  // panes never get to run their cleanup — a reload tears the JS
+  // context down first, a crash never runs it at all — so an orphaned
+  // `herdr agent attach` keeps holding its pane and every new attach
+  // to it exits code 1 (double-attach). Kill them all when the
+  // renderer goes away, in every shape that takes: a reload starts
+  // loading a new renderer, a crash reports render-process-gone, and
+  // a closed window destroys its webContents. The fresh renderer
+  // re-spawns what it needs. (2026-11-11: a page reload left an
+  // orphaned attach on w1:p1 and every later attach to it died.)
+  win.webContents.on('did-start-loading', () => termManager.killAll());
+  win.webContents.on('render-process-gone', () => termManager.killAll());
+  win.webContents.on('destroyed', () => termManager.killAll());
 
   win.webContents.on('did-finish-load', () => {
     console.log('[halo] renderer loaded');
@@ -90,11 +104,11 @@ app.whenReady().then(() => {
   // No shell outlives Halo.
   app.on('before-quit', () => termManager.killAll());
 
-  createWindow();
+  createWindow(termManager);
   console.log('[halo] ready — dev server:', isDev ? process.env.VITE_DEV_SERVER_URL : '(built dist)');
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(termManager);
   });
 });
 
