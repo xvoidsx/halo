@@ -369,52 +369,11 @@ button, input, select { font: inherit; color: inherit; }
 .terminal-failed { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 20px; }
 .terminal-failed .note { text-align: center; color: var(--amber); }
 
-/* --- Agent chat --- */
-.chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.chat-head {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  padding: 10px 20px;
-  border-bottom: 1px solid var(--line);
-  font-size: 13px;
-}
-.chat-head .c-agent { font-weight: 700; color: var(--cyan); }
-.chat-head .c-pane { color: var(--dim); font-size: 12px; }
-.chat-head .c-state { margin-left: auto; font-size: 12px; }
-.chat-head .c-state.good { color: var(--green); }
-.chat-head .c-state.warn { color: var(--amber); }
-.chat-caveat { padding: 8px 20px 0; color: var(--dim); font-size: 12px; margin: 0; }
-.chat-caveat code { color: var(--text); }
-.chat-log { flex: 1; overflow-y: auto; padding: 12px 20px; }
-.chat-log .chat-error { color: var(--amber); }
-.chat-msg { margin-bottom: 14px; max-width: 720px; }
-.chat-msg .chat-meta {
-  display: flex;
-  gap: 10px;
-  font-size: 11px;
-  color: var(--dim);
-  margin-bottom: 2px;
-}
-.chat-msg .chat-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.5; }
-.chat-msg.you .chat-meta span:first-child { color: var(--pink); }
-.chat-msg.agent .chat-meta span:first-child { color: var(--cyan); }
-.chat-msg.system .chat-text { color: var(--amber); font-size: 12px; }
-.chat-input-row {
-  display: flex;
-  gap: 10px;
-  padding: 12px 20px;
-  border-top: 1px solid var(--line);
-}
-.chat-input-row input[type="text"] {
-  flex: 1;
-  background: var(--bg-raise);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-.chat-input-row input:focus { outline: none; border-color: var(--pink); }
-.chat-input-row input:disabled { opacity: 0.5; }
+/* --- Chat list --- */
+/* The list rows live here; the chat's right side is a live attached
+   terminal (.chat-terminal below), not a text log — a TUI agent's
+   screen is not a conversation (see ChatView.tsx). */
+.chat-terminal { flex: 1; display: flex; min-width: 0; }
 
 /* --- Chat list — the agent center's jump-in list, as a GUI --- */
 .chat-wrap { flex: 1; display: flex; min-height: 0; }
@@ -459,24 +418,3 @@ button, input, select { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 .chat-row .c-detail { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; }
-
-/* Sticky-bottom scroll: the log only follows new output while you are
-   already at the bottom. Scroll up and it stays put, with a pill
-   offering the way back down. */
-.chat-view { position: relative; }
-.chat-jump-latest {
-  position: absolute;
-  left: 50%;
-  bottom: 66px;
-  transform: translateX(-50%);
-  background: var(--bg-raise);
-  border: 1px solid var(--pink);
-  color: var(--pink);
-  border-radius: 999px;
-  padding: 4px 14px;
-  font-size: 12px;
-  cursor: pointer;
-  z-index: 5;
-}
-.chat-jump-latest:hover { box-shadow: 0 0 12px rgba(255, 16, 240, 0.4); }
-.chat-head .c-jump { margin-left: 8px; }

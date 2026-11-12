@@ -566,10 +566,6 @@ export default function App() {
             herdr={herdr}
             activePaneId={settings.activeAgentPaneId}
             onPickAgent={(paneId) => setSettings((s) => ({ ...s, activeAgentPaneId: paneId }))}
-            onJumpToTerminal={(paneId) => {
-              const a = herdr?.agents.find((x) => x.paneId === paneId);
-              addTermPane(`herdr agent attach ${paneId}`, `herdr · ${a?.label ?? paneId}`);
-            }}
           />
         )}
         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} />}

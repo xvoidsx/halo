@@ -27,11 +27,9 @@ what to build, where things live, and the lessons that apply here.
   per repo).
 - `src/` — renderer (React + Vite): `App.tsx` (sidebar trails, main trail
   view, settings, terminal + chat tabs), `Terminal.tsx` (xterm.js panel,
-  lazy-loaded), `ChatView.tsx` (chat list + polling + per-agent
-  transcripts), `AgentChat.tsx` (one agent's chat pane: sticky-bottom log,
-  input, jump-to-terminal), `theme.css` (nightshadeNeon), `types.ts`
-  (shared types). No placeholder data anywhere — an empty trail list means
-  no trail has run yet.
+  lazy-loaded), `ChatView.tsx` (chat list + live attached terminal),
+  `theme.css` (nightshadeNeon), `types.ts` (shared types). No placeholder
+  data anywhere — an empty trail list means no trail has run yet.
 - `electron-builder.yml` — Linux `.deb` packaging. Output goes to `release/`
   (not `dist/`, which is Vite's renderer output). node-pty ships in the
   package (`files` + `asarUnpack` — the .node binary cannot load from
@@ -48,38 +46,51 @@ what to build, where things live, and the lessons that apply here.
   raw lines). Verify the real format on a machine with herdr installed
   before trusting the agent list.
 
-## Agent chat (herdr prompt / read) + chat list (0.3.0)
+## Agent chat — the list + the live terminal (0.4.0, supersedes 0.3.0's text log)
 
-- Chat is `agent prompt <pane_id> <text>` (types AND submits in one call)
-  and `agent read <pane_id> --source recent-unwrapped --lines N` (plain
-  terminal text). **Verified live against herdr 0.9.5** (scripts/
-  herdr-e2e-test.mjs, chat-list-test.mjs). `agent send` does NOT exist —
-  see "Herdr CLI — verified live" below.
-- `agent attach` is never used for chat — it takes over the current
-  terminal, which a GUI window cannot do. It IS used for jump-to-terminal:
-  a terminal pane runs `herdr agent attach <pane_id>` and renders the
-  agent's live screen (verified: the attach shows the agent's pane
-  output). Observation: attaching the same pane twice bumps the first
-  attach (it exits, code 1) — herdr behaviour, not a Halo bug.
+- Chat is the agent center's Enter-to-jump, as a GUI: a left-hand list of
+  every live agent, and the selected agent's **live terminal** on the
+  right — `herdr agent attach <pane_id>` in an xterm pane, in the same
+  window. You type straight into it. There is no text log and no send
+  box: the log was the wrong renderer (see below), and a send box would
+  only duplicate the agent's own input line.
+- **Why the text log died (0.3.0 → 0.4.0, Raven's bench):** a TUI agent's
+  `agent read` output IS its whole screen — the opencode logo is block
+  characters the chat font renders as solid rectangles, plus the prompt
+  line, status bar and version. No amount of ANSI stripping makes a
+  screen dump read as a conversation. The terminal renders it properly
+  because xterm is a terminal. `AgentChat.tsx` was deleted; `ChatMessage`
+  and `nextChatId` went with it.
+- `agent attach` is the chat surface now, not just jump-to-terminal.
+  Typing in the attach pane reaches the agent (verified: termWrite into
+  an attach → `agent read` shows the text). One attach per agent at a
+  time — switching chats unmounts the old pane and kills its pty, so the
+  "second attach bumps the first" behaviour never fires in the chat view.
 - **ChatView owns the chat** (`src/ChatView.tsx`): the agent list (the
   agent center's jump-in list, as a GUI — click a row, or arrow to it and
   hit Enter), ordered blocked → working → idle like the center; one-line
   preview of each agent's latest output; a pink unread dot when an agent
   produces output while you look elsewhere. The selected agent is read
-  every 2 s; the others are swept every ~10 s for previews/dots.
-  Transcripts live per pane_id (cap 500 messages each) so jumping between
-  chats never loses history. AgentChat is presentational: one agent's log
-  + input + jump-to-terminal button.
-- **Sticky-bottom scroll**: new output only pulls the log to the latest
-  while you are already at the bottom. Scroll up and it stays put, with a
-  "↓ Jump to latest" pill when new messages land above you.
+  every 2 s; the others are swept every ~10 s for previews/dots. The
+  poller now exists ONLY for previews and dots — no transcripts, no
+  messages. `agent prompt` / `agent read` are still the CLI boundary
+  (prompt verified live against herdr 0.9.5; `agent send` does NOT exist
+  — see "Herdr CLI — verified live" below).
 - Pane output is raw terminal text — ANSI escapes are stripped from the
-  displayed copy (the diff still runs on the raw output) so the chat
-  reads as text, not cursor-movement noise.
+  displayed preview copy (the diff still runs on the raw output) so the
+  preview reads as text, not cursor-movement noise.
 - **Terminal spawn splits the command on whitespace** into program + args
   (node-pty takes them separately) — `herdr agent attach w1:p1` works,
   and the pane status shows the full command (`Running herdr agent
   attach w1:p1 ...`). Plain `'herdr'` still boots the herdr TUI.
+- **Test launches must put herdr on PATH** (0.4.0 pack lesson): the
+  packaged app launched as halotest via bare `su -c` saw "herdr?" in the
+  chip and an empty chat list — `~/.local/bin` is not on a non-login
+  shell's PATH. Launch test instances with
+  `export PATH=/home/halotest/.local/bin:$PATH` first. (On a real navi
+  machine herdr is on the login PATH, so this is a sandbox-launch
+  artifact, not an app bug — but it reads exactly like broken detection,
+  so check PATH before believing the chip.)
 - Agent messages in the chat are text actually read from the pane. If a
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —
@@ -202,6 +213,17 @@ what to build, where things live, and the lessons that apply here.
 - Never claim a window launch you did not verify. If the sandbox has no
   display, say so and record what was actually run.
 - Bench on Cloudbook / T440p before calling the spike done.
+- **Killing Electron from a shell: never pattern-match your own command
+  line.** `pkill -f "[e]lectron"` is flaky here — the bracket trick
+  fails when the tool wraps the command, and one bad kill SIGKILLs your
+  own shell (seen 2026-11-11, 0.4.0). Reliable method: scan /proc with
+  the pattern held in a variable built from split quotes so the literal
+  never appears contiguously in your argv:
+  `pat="/opt/Ha""lo"; pat2="/usr/bin/ha""lo"; for p in /proc/[0-9]*; do
+  c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null); case "$c" in
+  *"$pat"*|*"$pat2"*) kill -9 ${p#/proc/};; esac; done`. This catches
+  the main process (/usr/bin/halo), zygotes and renderers (/opt/Halo).
+  Verify the CDP port is free afterwards (`ss -ltn | grep 9222`).
 
 ## Copy
 

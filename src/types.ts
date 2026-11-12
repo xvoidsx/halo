@@ -85,24 +85,6 @@ export interface HerdrState {
   agents: HerdrAgent[];
 }
 
-/** One line in an agent chat. 'you' is text Raven typed; 'agent' is text
- * read back from the agent's pane via `herdr agent read`; 'system' is
- * Halo itself (errors, state changes). Agent text is never invented. */
-export interface ChatMessage {
-  id: string;
-  at: string;
-  from: 'you' | 'agent' | 'system';
-  text: string;
-}
-
-let chatMsgCounter = 0;
-/** Unique ids for chat messages. One shared counter so the agent
- * poller and the send path never mint the same key for one transcript. */
-export function nextChatId(prefix: string): string {
-  chatMsgCounter += 1;
-  return `${prefix}-${Date.now().toString(36)}-${chatMsgCounter}`;
-}
-
 /** Result of sending a message to a herdr agent by pane_id. */
 export interface AgentSendResult {
   ok: boolean;

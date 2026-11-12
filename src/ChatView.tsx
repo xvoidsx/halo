@@ -3,36 +3,42 @@
 // The center's status tab is a live list of herdr agents and Enter jumps
 // straight into one (attach, by pane_id). Halo does the same shape in
 // its own way: a left-hand list of every live agent, and the selected
-// agent's chat on the right. Click a row — or arrow to it and hit Enter
-// — and you are in that chat.
+// agent's LIVE TERMINAL on the right — `herdr agent attach <pane>` in
+// an xterm pane, in the same window. You type straight into it.
+//
+// The terminal is the chat surface on purpose. An earlier version
+// rendered the agent as a text log (`herdr agent read` into chat
+// bubbles), and it looked broken: a TUI agent's output IS its whole
+// screen — the opencode logo is block characters the chat font renders
+// as solid rectangles, plus the prompt line, status bar and version.
+// A screen dump is not a conversation, and no amount of ANSI stripping
+// makes it one. The terminal renders it properly because xterm is a
+// terminal. There is no separate send box either — it would only
+// duplicate the agent's own input line.
 //
 // The list is ordered the way the center orders urgency: blocked agents
 // first (they need you), then working, then idle. A row shows a one-line
 // preview of the agent's latest output, and a pink dot when it produced
-// output while you were looking elsewhere.
+// output while you were looking elsewhere. Those two come from a
+// background poll of `herdr agent read` — the selected agent every 2 s,
+// the others every ~10 s, just enough to keep previews and dots honest
+// without hammering a local socket on old hardware.
 //
-// Polling: the agent you are looking at is read every 2 s; the others
-// are swept every ~10 s, just enough to keep their previews and unread
-// dots honest without hammering a local socket on old hardware. Every
-// agent's transcript lives here (keyed by pane_id) so jumping between
-// chats never loses what you were reading — transcripts cap at 500
-// messages per agent.
-//
-// Nothing is fabricated: agent lines are text actually read from the
-// pane via `herdr agent read`, and a read failure shows up as a state
-// line in that chat, never as a fake message.
+// Nothing is fabricated: the terminal shows the agent's real pane, and
+// previews are the pane's real last line. If a read fails, the row
+// simply keeps its herdr status and no dot is raised.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AgentStatus, ChatMessage, HerdrAgent, HerdrState } from './types.js';
-import { nextChatId } from './types.js';
-import AgentChat from './AgentChat.js';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import type { AgentStatus, HerdrAgent, HerdrState } from './types.js';
+
+// The terminal pulls in xterm.js (~450 kB) — lazy-load it, the same as
+// the Terminal tab does, so the trail view stays light.
+const TerminalPanel = lazy(() => import('./Terminal.js'));
 
 const POLL_MS = 2000;
 const READ_LINES = 120;
 /** Background agents are re-read every Nth tick (2 s x 5 = ~10 s). */
 const BACKGROUND_EVERY = 5;
-/** Transcripts cap per agent — long sessions stay light on old hardware. */
-const MAX_MESSAGES = 500;
 const PREVIEW_LEN = 80;
 
 /** Status priority, mirroring the agent center: blocked first, then
@@ -59,7 +65,7 @@ function lastLine(text: string): string {
   return lines[lines.length - 1] ?? '';
 }
 
-/** Pane output is raw terminal text — strip ANSI escapes so the chat
+/** Pane output is raw terminal text — strip ANSI escapes so the preview
  * reads as text, not cursor-movement noise. The diff still runs on the
  * raw output; only the displayed copy is cleaned. */
 function stripAnsi(text: string): string {
@@ -73,20 +79,15 @@ export default function ChatView({
   herdr,
   activePaneId,
   onPickAgent,
-  onJumpToTerminal,
 }: {
   herdr: HerdrState | null;
   activePaneId: string | null;
   onPickAgent: (paneId: string) => void;
-  onJumpToTerminal: (paneId: string) => void;
 }) {
   const agents = herdr?.agents ?? [];
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
-  const [transcripts, setTranscripts] = useState<Record<string, ChatMessage[]>>({});
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [unread, setUnread] = useState<Record<string, boolean>>({});
-  const [live, setLive] = useState<Record<string, boolean>>({});
-  const [readErrors, setReadErrors] = useState<Record<string, string>>({});
   const lastOutputRef = useRef<Record<string, string>>({});
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -101,13 +102,6 @@ export default function ChatView({
     selectedRef.current = selectedPaneId;
   }, [selectedPaneId]);
 
-  const appendMessage = useCallback((paneId: string, msg: ChatMessage) => {
-    setTranscripts((m) => {
-      const list = [...(m[paneId] ?? []), msg];
-      return { ...m, [paneId]: list.length > MAX_MESSAGES ? list.slice(-MAX_MESSAGES) : list };
-    });
-  }, []);
-
   // Follow the switcher / Settings pick; fall back to the first live
   // agent when the selected one goes away or nothing is selected yet.
   useEffect(() => {
@@ -120,26 +114,15 @@ export default function ChatView({
     }
   }, [activePaneId, agents, selectedPaneId]);
 
-  // Poll every agent's pane output; append only what is new.
+  // Poll every agent's pane output; only the newest tail matters —
+  // enough to raise an unread dot and refresh the row preview.
   useEffect(() => {
     if (!window.halo) return;
     let stopped = false;
     let tick = 0;
     const readOne = async (paneId: string) => {
       const res = await window.halo!.agentRead(paneId, READ_LINES);
-      if (stopped) return;
-      if (!res.ok) {
-        setReadErrors((e) => ({ ...e, [paneId]: res.detail }));
-        setLive((l) => ({ ...l, [paneId]: false }));
-        return;
-      }
-      setReadErrors((e) => {
-        if (!(paneId in e)) return e;
-        const next = { ...e };
-        delete next[paneId];
-        return next;
-      });
-      setLive((l) => ({ ...l, [paneId]: true }));
+      if (stopped || !res.ok) return;
       const prev = lastOutputRef.current[paneId] ?? '';
       if (res.output === prev) return;
       let tailRaw = res.output;
@@ -147,17 +130,11 @@ export default function ChatView({
         tailRaw = res.output.slice(prev.length);
       }
       // If the pane scrolled past our window, `read` returns a fresh
-      // snapshot that no longer starts with the old one — show it whole
+      // snapshot that no longer starts with the old one — take it whole
       // rather than trying to diff scrollback we cannot see.
       lastOutputRef.current[paneId] = res.output;
       const tail = stripAnsi(tailRaw);
       if (!tail.trim()) return;
-      appendMessage(paneId, {
-        id: nextChatId('agent'),
-        at: new Date().toLocaleTimeString(),
-        from: 'agent',
-        text: tail,
-      });
       const preview = lastLine(tail);
       if (preview) setPreviews((p) => ({ ...p, [paneId]: preview.slice(0, PREVIEW_LEN) }));
       if (paneId !== selectedRef.current) {
@@ -182,7 +159,7 @@ export default function ChatView({
       stopped = true;
       window.clearInterval(iv);
     };
-  }, [appendMessage]);
+  }, []);
 
   const sorted = useMemo(
     () => [...agents].sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.label.localeCompare(b.label)),
@@ -249,15 +226,25 @@ export default function ChatView({
         ))}
       </div>
       {selected && (
-        <AgentChat
-          key={selected.paneId}
-          agent={selected}
-          messages={transcripts[selected.paneId] ?? []}
-          live={live[selected.paneId] ?? false}
-          readError={readErrors[selected.paneId] ?? ''}
-          onAppend={appendMessage}
-          onJumpToTerminal={onJumpToTerminal}
-        />
+        <div className="chat-terminal">
+          <Suspense
+            fallback={
+              <div className="main-body">
+                <p className="empty">Opening {selected.label}’s terminal…</p>
+              </div>
+            }
+          >
+            <TerminalPanel
+              key={selected.paneId}
+              pane={{
+                id: `chat-attach-${selected.paneId}`,
+                title: `herdr · ${selected.label}`,
+                cwd: '',
+                command: `herdr agent attach ${selected.paneId}`,
+              }}
+            />
+          </Suspense>
+        </div>
       )}
     </div>
   );
