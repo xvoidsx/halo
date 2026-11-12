@@ -199,6 +199,16 @@ export default function ChatView({
   const selected = agents.find((a) => a.paneId === selectedPaneId) ?? null;
 
   const select = (paneId: string) => {
+    // Update the poller's ref SYNCHRONOUSLY, not via the effect below.
+    // The poller skips the selected pane because a read against an
+    // attached pane kills a starting TUI attach (code 1). The effect
+    // leaves a window of one render cycle where the poller still sees
+    // the OLD selection — and a background sweep that reaches this
+    // pane in that window reads it just as the attach starts. The
+    // click is the moment the pane stops being background, so the
+    // skip has to land in the same instant. (2026-11-11: the
+    // opencode attach died ~2 times in 5 clicks before this.)
+    selectedRef.current = paneId;
     setSelectedPaneId(paneId);
     setUnread((u) => ({ ...u, [paneId]: false }));
     onPickAgent(paneId);

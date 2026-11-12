@@ -78,6 +78,14 @@ export default function TerminalPanel({
   // end: Reconnect re-spawns the same command in a fresh terminal.
   const [deadCode, setDeadCode] = useState<number | null>(null);
   const [spawnNonce, setSpawnNonce] = useState(0);
+  // A quickly-dying attach gets one silent re-spawn (see onTermExit
+  // below). The count is per pane, and a manual Reconnect refreshes
+  // it — a retry that also dies stays dead, so this can never loop.
+  const spawnedAtRef = useRef(0);
+  const attachRetriesRef = useRef(0);
+  useEffect(() => {
+    attachRetriesRef.current = 0;
+  }, [pane.id, pane.command]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -146,6 +154,25 @@ export default function TerminalPanel({
     });
     const offExit = window.halo.onTermExit((ev) => {
       if (ev.id === termId) {
+        // An attach that dies in its first seconds almost always died
+        // to a read that was already in flight when it started — a
+        // `herdr agent read` landing on a TUI attach's startup kills
+        // it, code 1. The poller never STARTS such a read (the click
+        // marks the pane selected synchronously), but a read that was
+        // already running when the user clicked can't be stopped. So
+        // a quickly-dying attach gets one silent re-spawn: the read
+        // is done by then, and the retry starts clean. Only once,
+        // only for attaches, only in the first 3 seconds — a
+        // genuinely broken attach still lands dead with its
+        // Reconnect button.
+        const isAttach = pane.command?.startsWith('herdr agent attach ') ?? false;
+        const livedMs = Date.now() - spawnedAtRef.current;
+        if (isAttach && ev.code === 1 && livedMs < 3000 && attachRetriesRef.current < 1) {
+          attachRetriesRef.current += 1;
+          setStatus('Starting terminal…');
+          setSpawnNonce((n) => n + 1);
+          return;
+        }
         setAttached(false);
         setDeadCode(ev.code);
         onExitState?.(pane.id, true);
@@ -180,6 +207,7 @@ export default function TerminalPanel({
     });
     observer.observe(host);
 
+    spawnedAtRef.current = Date.now();
     void window.halo
       .termSpawn(pane.id, pane.cwd, term.cols, term.rows, pane.command)
       .then((res) => {
@@ -236,6 +264,7 @@ export default function TerminalPanel({
     if (reconnectSignal !== undefined && reconnectSignal > 0 && deadCode !== null) {
       setDeadCode(null);
       setStatus('Starting terminal…');
+      attachRetriesRef.current = 0;
       setSpawnNonce((n) => n + 1);
     }
     // Deliberately only on the signal.
@@ -255,6 +284,7 @@ export default function TerminalPanel({
             onClick={() => {
               setDeadCode(null);
               setStatus('Starting terminal…');
+              attachRetriesRef.current = 0;
               setSpawnNonce((n) => n + 1);
             }}
           >

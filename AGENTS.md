@@ -179,6 +179,54 @@ what to build, where things live, and the lessons that apply here.
   and waits for the app to come back. The chat-list test is also
   rig-agnostic on agent count now (it used to hardcode "2 live" /
   rowCount 2 and failed on a 3-agent rig).
+
+## Chat layout — the infinite-expansion bug (0.6.1)
+
+- **A flex item's automatic minimum size is its content, and an
+  xterm's width IS content.** The chat terminal grew ~35px/s forever
+  (measured: the wrap 927 → 1410 in 14 s, the document's
+  scrollWidth with it) because the chat's `.terminal-wrap` never got
+  the `min-width: 0` that `.terminal-panes` gives its own wraps —
+  so the fit loop ran away: fit measures the host, widens the
+  terminal, the widened terminal widens its ancestors, fit measures
+  again. The Terminal tab was immune the whole time because its
+  wraps ARE constrained. Fix: `min-width: 0` on every flex item on
+  the path from the window to a terminal (`.terminal-view`,
+  `.terminal-wrap`, `.terminal-panes`, `.terminal-host`,
+  `.chat-view`, `.chat-wrap`), and `overflow: hidden` on
+  `.terminal-host` so a terminal can never push the document wider
+  even mid-resize. The xterm still fits exactly (host − padding).
+- **Regression test:** `scripts/chat-layout-test.mjs` opens Chat on a
+  real opencode agent, samples the layout for 10 s, and asserts no
+  horizontal overflow, the wrap never exceeding its container, and
+  the width stable — then the same after switching agents. Only a
+  real TUI agent triggers the loop; a fake pi never did.
+
+## Chat attach race — the poller can still kill a starting attach (0.6.1)
+
+- **The 0.5.0 fix had two windows left.** The poller skips the
+  selected pane and any pane with a live attach, but both skips are
+  refs updated by effects — one render cycle after the click — and a
+  background sweep that reaches the pane in that window reads it
+  just as the attach starts (code 1). Worse, a read that was
+  ALREADY in flight when the user clicked can't be stopped at all.
+  The opencode attach died ~2 times in 5 clicks before this fix
+  (the splits test caught it twice; the 0.6.0 session just got
+  lucky). Fixes, both in the chat path:
+  1. **Synchronous skip on select** (`ChatView.select`): the
+     poller's `selectedRef` is set in the click handler itself, in
+     the same instant as the state — the pane stops being background
+     the moment it's picked, not a render later.
+  2. **One silent re-spawn** (`Terminal.tsx`): an attach that exits
+     code 1 in its first 3 s gets re-spawned once, with no dead-pane
+     UI. The in-flight read is done by then, so the retry starts
+     clean. Only once, only for attaches, only in the first 3 s —
+     a genuinely broken attach still lands dead with Reconnect.
+     The count resets per pane and on manual Reconnect, so it can
+     never loop.
+- **Proof:** the splits test's opencode check (the race's witness)
+  passed 3× in a row on dev and 2× in a row packaged after the
+  fix, after failing 2 of 5 before it.
 - Agent messages in the chat are text actually read from the pane. If a
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —
