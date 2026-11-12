@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentStatus, HaloSettings, HerdrAgent, HerdrState, Trail } from './types.js';
 import type { TermPane } from './Terminal.js';
 import { defaultSettings } from './types.js';
@@ -427,6 +427,19 @@ export default function App() {
   // TUI in one. Panes mount on first visit and stay alive across tabs.
   const [termPanes, setTermPanes] = useState<TermPane[]>([{ id: 'pane-home', title: 'shell', cwd: '' }]);
   const [termMounted, setTermMounted] = useState(false);
+  // Split shares: one fraction per pane, summing to 1. Dragging a
+  // divider moves share between its two neighbours (min 10% each).
+  const [termSizes, setTermSizes] = useState<number[]>([1]);
+  const dividerDragRef = useRef<{ index: number; startX: number; width: number; start: number[] } | null>(null);
+  // Pane ids currently holding a live `herdr agent attach` in any
+  // terminal — the chat poller must not `agent read` those (a read
+  // kills a live attach). TerminalPanels report their attach state.
+  const [attachedPanes, setAttachedPanes] = useState<string[]>([]);
+  const onAttachState = useCallback((paneId: string, attached: boolean) => {
+    setAttachedPanes((prev) =>
+      attached ? (prev.includes(paneId) ? prev : [...prev, paneId]) : prev.filter((p) => p !== paneId),
+    );
+  }, []);
 
   const refreshHerdr = useCallback(() => {
     if (window.halo) void window.halo.herdrStatus().then(setHerdr);
@@ -467,12 +480,71 @@ export default function App() {
         command,
       },
     ]);
+    // The new pane takes half of the last pane's share — a split
+    // divides what you were looking at.
+    setTermSizes((sizes) => {
+      if (sizes.length === 0) return [1];
+      const last = sizes[sizes.length - 1];
+      return [...sizes.slice(0, -1), last / 2, last / 2];
+    });
     setView('terminal');
   }, []);
 
   const closeTermPane = useCallback((id: string) => {
-    setTermPanes((panes) => (panes.length > 1 ? panes.filter((p) => p.id !== id) : panes));
-  }, []);
+    setTermPanes((panes) => {
+      if (panes.length <= 1) return panes;
+      const idx = panes.findIndex((p) => p.id === id);
+      if (idx === -1) return panes;
+      return panes.filter((p) => p.id !== id);
+    });
+    // Hand the closed pane's share to its neighbour so the rest keeps
+    // its proportions.
+    setTermSizes((sizes) => {
+      if (sizes.length <= 1) return [1];
+      const idx = termPanes.findIndex((p) => p.id === id);
+      if (idx === -1) return sizes;
+      const closed = sizes[idx] ?? 0;
+      const rest = sizes.filter((_, i) => i !== idx);
+      const giveTo = Math.max(0, idx - 1);
+      rest[giveTo] = (rest[giveTo] ?? 0) + closed;
+      return rest;
+    });
+  }, [termPanes]);
+
+  // Dragging a divider moves share between its two neighbours. The
+  // drag is measured against the sizes at drag start, so a fast drag
+  // never drifts; each pane keeps at least 10% of the width.
+  const onDividerPointerDown = (index: number) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const container = (e.target as HTMLElement).closest('.terminal-panes') as HTMLElement | null;
+    if (!container) return;
+    const width = container.getBoundingClientRect().width;
+    if (width <= 0) return;
+    dividerDragRef.current = { index, startX: e.clientX, width, start: termSizes };
+    const onMove = (ev: PointerEvent) => {
+      const drag = dividerDragRef.current;
+      if (!drag) return;
+      const delta = (ev.clientX - drag.startX) / drag.width;
+      setTermSizes((sizes) => {
+        const next = [...drag.start];
+        const a = next[drag.index];
+        const b = next[drag.index + 1];
+        if (a === undefined || b === undefined) return sizes;
+        const min = 0.1;
+        const clamped = Math.max(-(a - min), Math.min(b - min, delta));
+        next[drag.index] = a + clamped;
+        next[drag.index + 1] = b - clamped;
+        return next;
+      });
+    };
+    const onUp = () => {
+      dividerDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
 
   const selected = useMemo(() => trails.find((t) => t.id === selectedId) ?? trails[0], [trails, selectedId]);
   const activeAgent = useMemo(
@@ -566,6 +638,8 @@ export default function App() {
             herdr={herdr}
             activePaneId={settings.activeAgentPaneId}
             onPickAgent={(paneId) => setSettings((s) => ({ ...s, activeAgentPaneId: paneId }))}
+            skipReadPaneIds={attachedPanes}
+            onAttachState={onAttachState}
           />
         )}
         {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} />}
@@ -588,8 +662,23 @@ export default function App() {
                   </div>
                 }
               >
-                {termPanes.map((p) => (
-                  <TerminalPanel key={p.id} pane={p} onClose={termPanes.length > 1 ? () => closeTermPane(p.id) : undefined} />
+                {termPanes.map((p, i) => (
+                  <Fragment key={p.id}>
+                    {i > 0 && (
+                      <div
+                        className="term-divider"
+                        role="separator"
+                        aria-label={`Resize ${termPanes[i - 1]?.title ?? 'pane'} and ${p.title}`}
+                        onPointerDown={onDividerPointerDown(i - 1)}
+                      />
+                    )}
+                    <TerminalPanel
+                      pane={p}
+                      onClose={termPanes.length > 1 ? () => closeTermPane(p.id) : undefined}
+                      style={{ flexGrow: termSizes[i] ?? 1, flexBasis: 0 }}
+                      onAttachState={onAttachState}
+                    />
+                  </Fragment>
                 ))}
               </Suspense>
             </div>

@@ -20,9 +20,13 @@
 // first (they need you), then working, then idle. A row shows a one-line
 // preview of the agent's latest output, and a pink dot when it produced
 // output while you were looking elsewhere. Those two come from a
-// background poll of `herdr agent read` — the selected agent every 2 s,
-// the others every ~10 s, just enough to keep previews and dots honest
-// without hammering a local socket on old hardware.
+// background poll of `herdr agent read` — the non-selected agents every
+// ~10 s, just enough to keep previews and dots honest without hammering
+// a local socket on old hardware. The selected agent is NEVER read: its
+// live terminal IS the attach, and a read against an attached pane kills
+// the attach (2026-11-11 — opencode died on every click until the poll
+// stopped reading the selected agent). The same rule covers any pane
+// another terminal holds an attach to (see skipReadPaneIds).
 //
 // Nothing is fabricated: the terminal shows the agent's real pane, and
 // previews are the pane's real last line. If a read fails, the row
@@ -67,10 +71,12 @@ function lastLine(text: string): string {
 
 /** Pane output is raw terminal text — strip ANSI escapes so the preview
  * reads as text, not cursor-movement noise. The diff still runs on the
- * raw output; only the displayed copy is cleaned. */
+ * raw output; only the displayed copy is cleaned. The CSI pattern
+ * covers intermediate bytes (space–/) so sequences like
+ * `ESC[?1016;2$y` come off whole instead of leaving `$y` behind. */
 function stripAnsi(text: string): string {
   return text
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b\][^\x07]*\x07/g, '')
     .replace(/\x1b[()][0-9A-Za-z]/g, '');
 }
@@ -79,10 +85,16 @@ export default function ChatView({
   herdr,
   activePaneId,
   onPickAgent,
+  skipReadPaneIds,
+  onAttachState,
 }: {
   herdr: HerdrState | null;
   activePaneId: string | null;
   onPickAgent: (paneId: string) => void;
+  /** Pane ids currently holding a live `herdr agent attach` in some
+   * other terminal — the poller must not `agent read` those. */
+  skipReadPaneIds: string[];
+  onAttachState: (paneId: string, attached: boolean) => void;
 }) {
   const agents = herdr?.agents ?? [];
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
@@ -101,6 +113,10 @@ export default function ChatView({
   useEffect(() => {
     selectedRef.current = selectedPaneId;
   }, [selectedPaneId]);
+  const skipReadRef = useRef(skipReadPaneIds);
+  useEffect(() => {
+    skipReadRef.current = skipReadPaneIds;
+  }, [skipReadPaneIds]);
 
   // Follow the switcher / Settings pick; fall back to the first live
   // agent when the selected one goes away or nothing is selected yet.
@@ -143,11 +159,13 @@ export default function ChatView({
     };
     const doTick = async () => {
       tick += 1;
-      const sel = selectedRef.current;
-      if (sel) await readOne(sel);
+      // Never read the selected agent: its live terminal is the attach,
+      // and a read against an attached pane kills the attach. Never read
+      // a pane another terminal holds an attach to, either. Only the
+      // background sweep reads, and only panes with no live attach.
       if (tick % BACKGROUND_EVERY === 0) {
         for (const a of agentsRef.current) {
-          if (a.paneId !== sel) await readOne(a.paneId);
+          if (a.paneId !== selectedRef.current && !skipReadRef.current.includes(a.paneId)) await readOne(a.paneId);
         }
       }
     };
@@ -242,6 +260,7 @@ export default function ChatView({
                 cwd: '',
                 command: `herdr agent attach ${selected.paneId}`,
               }}
+              onAttachState={onAttachState}
             />
           </Suspense>
         </div>

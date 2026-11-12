@@ -51,13 +51,25 @@ export interface TermPane {
 export default function TerminalPanel({
   pane,
   onClose,
+  style,
+  onAttachState,
 }: {
   pane: TermPane;
   onClose?: () => void;
+  /** Sizing for split layouts — the parent sets the pane's share. */
+  style?: React.CSSProperties;
+  /** Tells the parent when this pane is attached to a herdr agent's
+   * pane — a pane with a live attach must not be `agent read` at the
+   * same time (the read kills the attach; see below). */
+  onAttachState?: (paneId: string, attached: boolean) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState('Starting terminal…');
   const [failed, setFailed] = useState('');
+  // When the shell exits, the pane offers a way back instead of a dead
+  // end: Reconnect re-spawns the same command in a fresh terminal.
+  const [deadCode, setDeadCode] = useState<number | null>(null);
+  const [spawnNonce, setSpawnNonce] = useState(0);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -69,6 +81,17 @@ export default function TerminalPanel({
     }
     let disposed = false;
     let termId = '';
+    // A pane running `herdr agent attach <pane>` holds that agent's
+    // pane open. Tell the parent while it lives, so nothing else
+    // `agent read`s that pane at the same time (2026-11-11: a read
+    // during the attach's startup kills the attach, code 1, for a TUI
+    // agent — opencode died on every click until the poller stopped
+    // reading the selected agent; a dumb prompt never noticed).
+    const attachMatch = pane.command?.match(/^herdr agent attach (\S+)\s*$/);
+    const attachPaneId = attachMatch?.[1] ?? null;
+    const setAttached = (attached: boolean) => {
+      if (attachPaneId) onAttachState?.(attachPaneId, attached);
+    };
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: "'JetBrains Mono', 'DejaVu Sans Mono', monospace",
@@ -104,13 +127,34 @@ export default function TerminalPanel({
       if (ev.id === termId) term.write(ev.data);
     });
     const offExit = window.halo.onTermExit((ev) => {
-      if (ev.id === termId) setStatus(`Shell exited (code ${ev.code}). Close the panel and reopen it for a new shell.`);
+      if (ev.id === termId) {
+        setAttached(false);
+        setDeadCode(ev.code);
+        setStatus(`Shell exited (code ${ev.code}).`);
+      }
     });
     term.onData((data) => {
       if (termId) void window.halo?.termWrite(termId, data);
     });
+    // Resize the pty only once the terminal has settled. Mounting a
+    // pane makes its host grow a column at a time while the layout
+    // settles (the chat attach saw 103 → 123 in ~20 steps), and a
+    // TUI agent's attach client dies on that SIGWINCH storm — herdr's
+    // exited code 1 after three rapid resizes, while a dumb prompt
+    // ignores them. Debouncing collapses the storm into one resize to
+    // the final size; the xterm itself still reflows instantly, only
+    // the pty is told late. Also less IPC chatter on old hardware.
+    const RESIZE_SETTLE_MS = 150;
+    let resizeTimer: number | null = null;
+    let pendingResize: { cols: number; rows: number } | null = null;
     term.onResize(({ cols, rows }) => {
-      if (termId) void window.halo?.termResize(termId, cols, rows);
+      pendingResize = { cols, rows };
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = null;
+        if (pendingResize && termId) void window.halo?.termResize(termId, pendingResize.cols, pendingResize.rows);
+        pendingResize = null;
+      }, RESIZE_SETTLE_MS);
     });
     const observer = new ResizeObserver(() => {
       try {
@@ -134,6 +178,8 @@ export default function TerminalPanel({
           return;
         }
         termId = res.id;
+        setAttached(true);
+        setDeadCode(null);
         setStatus(res.detail);
         term.focus();
       })
@@ -149,6 +195,8 @@ export default function TerminalPanel({
       observer.disconnect();
       offData();
       offExit();
+      setAttached(false);
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       if (termId) void window.halo?.termKill(termId);
       try {
         webgl?.dispose();
@@ -158,14 +206,27 @@ export default function TerminalPanel({
       fit.dispose();
       term.dispose();
     };
-  }, [pane.id, pane.cwd, pane.command]);
+  }, [pane.id, pane.cwd, pane.command, spawnNonce]);
 
   return (
-    <div className="terminal-wrap">
+    <div className="terminal-wrap" style={style}>
       <div className="terminal-bar">
         <span className="t-repo">{pane.title}</span>
         <span className="t-path">{pane.cwd || 'home'}</span>
         {status && <span className="t-status">{status}</span>}
+        {deadCode !== null && (
+          <button
+            className="t-reconnect"
+            title="The shell exited — start it again"
+            onClick={() => {
+              setDeadCode(null);
+              setStatus('Starting terminal…');
+              setSpawnNonce((n) => n + 1);
+            }}
+          >
+            ↻ Reconnect
+          </button>
+        )}
         {onClose && (
           <button className="t-close" onClick={onClose} title="Close this pane">
             ✕

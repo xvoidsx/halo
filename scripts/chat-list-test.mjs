@@ -1,10 +1,15 @@
-// Chat-list check for Halo 0.4.0 against a REAL herdr server (0.9.5)
-// with TWO live agents (fakepi w1:p1, fakepi2 w1:p2).
+// Chat-list check for Halo 0.5.0 against a REAL herdr server (0.9.5)
+// with TWO live agents (fakepi, fakepi2).
 // Launch Halo with --remote-debugging-port=9222 first, then run this.
+// Pane ids are read off the rows, not hardcoded.
 //
-// 0.4.0 shape: the chat is the agent's LIVE TERMINAL in the same
+// 0.5.0 shape: the chat is the agent's LIVE TERMINAL in the same
 // window (the center's Enter-to-jump, as a GUI pane) — the text log
 // is gone, because a TUI agent's screen is not a conversation.
+// The poller reads only panes with no live attach: the selected agent
+// is never read (a read kills a live attach), and the background sweep
+// covers the rest. The direct-attach check runs off the Chat tab so
+// the poller is stopped while it types.
 // Covers, in order:
 //  1. the chat list shows both live agents, blocked-first ordered
 //  2. clicking a row opens that agent's attached terminal in the chat view
@@ -68,6 +73,16 @@ const expr = `(async () => {
   out.noTextLog = !q('.chat-log') && !q('.chat-input-row');
 
   // Jump into the second chat: its attached terminal opens in place.
+  // Pane ids come from the rows themselves (wN:pM), not hardcoded —
+  // herdr renumbers panes when the workspace is rebuilt.
+  const paneIdOf = (label) => {
+    const row = rows().find((r) => r.textContent.includes(label));
+    return row?.textContent.match(/w[0-9]+:p[0-9]+/)?.[0] ?? null;
+  };
+  const fakepiPane = paneIdOf('fakepi');
+  const fakepi2Pane = rows().find((r) => r.textContent.includes('fakepi2'))?.textContent.match(/w[0-9]+:p[0-9]+/)?.[0] ?? null;
+  out.fakepiPane = fakepiPane;
+  out.fakepi2Pane = fakepi2Pane;
   rows()[1]?.click();
   let pane2 = null;
   for (let i = 0; i < 8; i++) {
@@ -81,7 +96,7 @@ const expr = `(async () => {
 
   // The attach renders the agent's live screen: type into the pane
   // and watch it come back through the attach's own pty stream.
-  await window.halo.agentSend('w1:p2', 'attach hello');
+  await window.halo.agentSend(fakepi2Pane, 'attach hello');
   let render = '';
   for (let i = 0; i < 8; i++) {
     await sleep(1000);
@@ -90,8 +105,8 @@ const expr = `(async () => {
   }
   out.attachRenders = render.includes('attach hello');
 
-  // Talk to the agent we are NOT looking at (fakepi, w1:p1).
-  const sendRes = await window.halo.agentSend('w1:p1', 'background hello');
+  // Talk to the agent we are NOT looking at (fakepi).
+  const sendRes = await window.halo.agentSend(fakepiPane, 'background hello');
   out.bgSendOk = sendRes.ok;
 
   // Wait for the ~10s background sweep to raise the unread dot + preview.
@@ -118,13 +133,18 @@ const expr = `(async () => {
 
   // Typing in an attach pane reaches the agent: spawn a direct attach
   // to the agent we are NOT looking at (fakepi2), type, read the pane.
-  const spawn = await window.halo.termSpawn('chat-attach-check', '', 80, 24, 'herdr agent attach w1:p2');
+  // Leave the Chat tab first — the poller stops when ChatView
+  // unmounts, and a background read would kill this unregistered
+  // direct attach the same way it killed the chat attach (0.5.0).
+  btnByText('Trails')?.click();
+  await sleep(1000);
+  const spawn = await window.halo.termSpawn('chat-attach-check', '', 80, 24, 'herdr agent attach ' + fakepi2Pane);
   out.directSpawn = spawn;
   if (spawn.ok && spawn.id) {
     await sleep(2000);
     await window.halo.termWrite(spawn.id, 'terminal hello\\n');
     await sleep(2500);
-    const readRes = await window.halo.agentRead('w1:p2', 30);
+    const readRes = await window.halo.agentRead(fakepi2Pane, 30);
     out.typeLands = (readRes.output || '').includes('terminal hello');
     await window.halo.termKill(spawn.id);
   }
@@ -142,14 +162,14 @@ const pass =
   (val.rowTexts?.[1] ?? '').includes('fakepi2') &&
   val.attachPane === true &&
   (val.attachTitle ?? '').includes('fakepi2') &&
-  (val.attachStatus ?? '').includes('herdr agent attach w1:p2') &&
+  (val.attachStatus ?? '').includes('herdr agent attach') &&
   val.attachRenders === true &&
   val.bgSendOk === true &&
   val.bgDot === true &&
   (val.bgPreview ?? '').includes('background hello') &&
   val.backPanes === 1 &&
   (val.backTitle ?? '').includes('fakepi') &&
-  (val.backStatus ?? '').includes('herdr agent attach w1:p1') &&
+  (val.backStatus ?? '').includes('herdr agent attach') &&
   val.dotCleared === true &&
   val.directSpawn?.ok === true &&
   val.typeLands === true;

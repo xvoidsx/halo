@@ -91,6 +91,53 @@ what to build, where things live, and the lessons that apply here.
   machine herdr is on the login PATH, so this is a sandbox-launch
   artifact, not an app bug — but it reads exactly like broken detection,
   so check PATH before believing the chip.)
+- **Packaged test launches need a CLEAN environment** (0.5.0): launching
+  the packaged app as halotest via `su -c 'export PATH=...; ...'` left
+  it seeing only 2 of halotest's 3 agents — the contaminated env made
+  its `herdr` talk to another user's server (the CLI, same user, saw
+  all 3 at the same moment). Relaunching with `env -i HOME=...
+  PATH=...` showed all 3. Always launch packaged test instances with
+  `env -i` and explicit HOME/PATH; never trust a mixed-env launch's
+  agent list.
+
+## Agent chat — the list + the live terminal (0.5.0: read-kills-attach)
+
+- **Never `agent read` a pane with a live `agent attach` (0.5.0, the
+  shell-exit bug).** The chat poller used to read the selected agent
+  every 2 s for previews/dots; a read landing during a TUI agent's
+  attach startup kills the attach, code 1, silently — opencode died on
+  every click in the sandbox (and on Raven's machine), while a dumb
+  prompt never noticed. Proof: disabling the poller made the opencode
+  attach stay up 10 s; re-enabling the skip made it stay up in every
+  test since. The server log shows the attach connecting fine and the
+  client detaching on its own ~1.4 s later — the kill comes from the
+  read, not the server. Rule: the poller reads ONLY panes with no live
+  attach — never the selected agent, never a pane another terminal
+  holds an attach to. TerminalPanel reports attach state up through
+  `onAttachState(paneId, attached)`; App keeps the set and passes it
+  to ChatView as `skipReadPaneIds`. The selected agent is skipped
+  unconditionally as well (a read could land between mount and
+  register). A dead attach unregisters on exit, so the poller resumes
+  reading that agent and its preview/dots come back.
+- **Dead panes reconnect.** When a shell exits, the pane shows
+  `Shell exited (code N).` and a `↻ Reconnect` button that re-spawns
+  the same command in a fresh terminal (a `spawnNonce` in the effect
+  deps). The chat attach has no close button, so without this a dead
+  chat was a dead end — now it is a way back.
+- **Pty resizes are debounced (150 ms, trailing).** Mounting a pane
+  makes its host grow a column at a time while the layout settles (the
+  chat attach saw 103 → 123 in ~20 steps); the storm was first
+  suspected in the shell-exit hunt, and the debounce collapses it into
+  one resize to the final size. The exit's real cause was the poller
+  read (above) — the debounce is still the right shape: less IPC
+  chatter, and a TUI agent never sees a SIGWINCH storm. The xterm
+  itself still reflows instantly; only the pty is told late.
+- **Terminal splits are resizable.** Dividers between panes drag to
+  move width between neighbours (min 10% each, measured against the
+  sizes at drag start so a fast drag never drifts). Splitting divides
+  the last pane's share; closing hands the closed pane's share to its
+  neighbour. The panes reflow through the same ResizeObserver → fit
+  path, so the debounced resize keeps the pty in step.
 - Agent messages in the chat are text actually read from the pane. If a
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —
@@ -224,6 +271,16 @@ what to build, where things live, and the lessons that apply here.
   *"$pat"*|*"$pat2"*) kill -9 ${p#/proc/};; esac; done`. This catches
   the main process (/usr/bin/halo), zygotes and renderers (/opt/Halo).
   Verify the CDP port is free afterwards (`ss -ltn | grep 9222`).
+- **Kill and relaunch in SEPARATE exec calls.** The kill exec's own text
+  must not contain the target string anywhere else — one launch line
+  with `npx electron` in the same command SIGKILLs your own shell
+  (seen 2026-11-11, 0.5.0).
+- **Backslashes die inside template-literal CDP expressions.** A
+  template literal in a `.mjs` test script eats `\d` in a regex before
+  the expression reaches the page, so `/w\d+:p\d+/` becomes
+  `/wd+:pd+/` and matches nothing. Write regexes in test expressions
+  with character classes (`/w[0-9]+:p[0-9]+/`) or double the
+  backslashes — never a single `\d`, `\w`, or `\s`.
 
 ## Copy
 

@@ -335,10 +335,31 @@ button, input, select { font: inherit; color: inherit; }
 .terminal-toolbar { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
 .terminal-toolbar .note { color: var(--dim); font-size: 12px; margin-left: auto; }
 .terminal-panes { flex: 1; display: flex; min-height: 0; }
-.terminal-panes > .terminal-wrap { flex: 1; min-width: 0; border-right: 1px solid var(--line); }
-.terminal-panes > .terminal-wrap:last-child { border-right: none; }
+.terminal-panes > .terminal-wrap { flex: 1; min-width: 0; }
+/* Split divider — drag it to move width between its two neighbours. */
+.term-divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--line);
+  touch-action: none;
+}
+.term-divider:hover { border-left-color: var(--pink); background: rgba(255, 16, 240, 0.12); }
+.term-divider:active { border-left-color: var(--pink); background: rgba(255, 16, 240, 0.25); }
 .t-close { background: transparent; border: none; color: var(--dim); cursor: pointer; padding: 2px 6px; margin-left: 8px; }
 .t-close:hover { color: var(--red); }
+/* Reconnect — shown when the shell exits, so a dead pane is a way back,
+   not a dead end. */
+.t-reconnect {
+  background: none;
+  border: 1px solid var(--pink);
+  color: var(--pink);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.t-reconnect:hover { box-shadow: 0 0 10px rgba(255, 16, 240, 0.4); }
 
 /* --- BYOK provider cards --- */
 .provider-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
