@@ -22,7 +22,11 @@ function check(name, ok, extra = '') {
   if (!ok) failures += 1;
 }
 
-const RIG = path.join(os.homedir(), 'workspace', '.tmp', 'setup-rig.sh');
+const RIG =
+  process.env.HALO_RIG_SCRIPT || path.join(os.homedir(), 'workspace', '.tmp', 'setup-rig.sh');
+// The packaged run (as halotest) passes HALO_RIG_SCRIPT pointing at
+// the halotest rig rebuild script — the homedir path above is the
+// dev rig and does not exist for halotest.
 
 async function getPageWs() {
   for (let i = 0; i < 40; i++) {
