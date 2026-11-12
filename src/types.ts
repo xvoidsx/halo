@@ -130,16 +130,30 @@ export interface ProviderConfig {
   enabled: boolean;
 }
 
+export interface TerminalConfig {
+  /** Terminal font size in px. 13 is the default; 11–16 covers the
+   * small-screen bench machines and the big-monitor setups alike. */
+  fontSize: number;
+}
+
 export interface HaloSettings {
   repos: RepoEntry[];
   activeRepoId: string | null;
   activeAgentPaneId: string | null;
   ollama: OllamaConfig;
+  terminal: TerminalConfig;
   byok: {
     openai: ProviderConfig;
     anthropic: ProviderConfig;
     openrouter: ProviderConfig;
     deepseek: ProviderConfig;
+    groq: ProviderConfig;
+    mistral: ProviderConfig;
+    huggingface: ProviderConfig;
+    gemini: ProviderConfig;
+    xai: ProviderConfig;
+    venice: ProviderConfig;
+    trustedrouter: ProviderConfig;
   };
 }
 
@@ -148,10 +162,18 @@ export const defaultSettings: HaloSettings = {
   activeRepoId: null,
   activeAgentPaneId: null,
   ollama: { baseUrl: 'http://127.0.0.1:11434', defaultModel: 'qwen3:8b' },
+  terminal: { fontSize: 13 },
   byok: {
     openai: { apiKey: '', enabled: false },
     anthropic: { apiKey: '', enabled: false },
     openrouter: { apiKey: '', enabled: false },
     deepseek: { apiKey: '', enabled: false },
+    groq: { apiKey: '', enabled: false },
+    mistral: { apiKey: '', enabled: false },
+    huggingface: { apiKey: '', enabled: false },
+    gemini: { apiKey: '', enabled: false },
+    xai: { apiKey: '', enabled: false },
+    venice: { apiKey: '', enabled: false },
+    trustedrouter: { apiKey: '', enabled: false },
   },
 };

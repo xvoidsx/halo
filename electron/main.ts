@@ -57,13 +57,24 @@ function createWindow(termManager: TerminalManager): void {
 
 app.whenReady().then(() => {
   // Terminal: node-pty shells, one per repo. Output streams to the
-  // renderer; input and resizes come back over IPC.
+  // renderer; input and resizes come back over IPC. The sends are
+  // guarded by isDestroyed(): when the window closes, a pty can still
+  // flush a final data chunk (or an exit) after the webContents is
+  // destroyed but before killAll() has run — sending to a destroyed
+  // webContents throws "Object has been destroyed" as an uncaught
+  // main-process exception, which is the error dialog on close
+  // (2026-11-12, Raven's bench). The check and the send are in one
+  // synchronous block, so the window cannot be destroyed between them.
   const termManager = new TerminalManager(
     (id, data) => {
-      win?.webContents.send('halo:term-data', { id, data });
+      if (win && !win.webContents.isDestroyed()) {
+        win.webContents.send('halo:term-data', { id, data });
+      }
     },
     (id, code) => {
-      win?.webContents.send('halo:term-exit', { id, code });
+      if (win && !win.webContents.isDestroyed()) {
+        win.webContents.send('halo:term-exit', { id, code });
+      }
     },
   );
   ipcMain.handle('halo:term-spawn', (_e, repoId: string, cwd: string, cols: number, rows: number, command?: string) =>
@@ -76,6 +87,7 @@ app.whenReady().then(() => {
   ipcMain.handle('halo:term-kill', (_e, id: string) => termManager.kill(id));
 
   // Settings: local file only, never leaves the machine.
+  ipcMain.handle('halo:getVersion', (): string => app.getVersion());
   ipcMain.handle('halo:getSettings', (): HaloSettings => loadSettings());
   ipcMain.handle('halo:saveSettings', (_e, next: HaloSettings): { ok: true; path: string } => {
     saveSettings(next);

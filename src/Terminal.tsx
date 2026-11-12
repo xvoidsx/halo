@@ -52,6 +52,7 @@ export default function TerminalPanel({
   pane,
   onClose,
   style,
+  fontSize,
   onAttachState,
   onExitState,
   reconnectSignal,
@@ -63,6 +64,10 @@ export default function TerminalPanel({
   onClose?: () => void;
   /** Sizing for split layouts — the parent sets the pane's share. */
   style?: React.CSSProperties;
+  /** Terminal font size in px, from Settings. Changing it reflows the
+   * live terminal (no re-spawn) — the option is set on the running
+   * Terminal and the pane is re-fit. Defaults to 13 when unset. */
+  fontSize?: number;
   /** Tells the parent when this pane is attached to a herdr agent's
    * pane — a pane with a live attach must not be `agent read` at the
    * same time (the read kills the attach; see below). */
@@ -85,6 +90,9 @@ export default function TerminalPanel({
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  // The FitAddon lives inside the spawn effect; the font-size effect
+  // re-fits through this ref so a size change reflows the live pane.
+  const fitRef = useRef<(() => void) | null>(null);
   const [status, setStatus] = useState('Starting terminal…');
   const [failed, setFailed] = useState('');
   // When the shell exits, the pane offers a way back instead of a dead
@@ -124,7 +132,7 @@ export default function TerminalPanel({
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: "'JetBrains Mono', 'DejaVu Sans Mono', monospace",
-      fontSize: 13,
+      fontSize: fontSize ?? 13,
       theme: NIGHTSHADE,
     });
     termRef.current = term;
@@ -166,7 +174,14 @@ export default function TerminalPanel({
         // Layout not ready yet; a resize will fit it.
       }
     };
+    // The font-size effect (below) re-fits through this ref — the
+    // FitAddon lives inside this spawn effect, so it is shared out.
+    fitRef.current = fitIfVisible;
     fitIfVisible();
+    // The first fit fires onResize too, but set the mirror explicitly
+    // so the host always carries the terminal's size from the start.
+    host.dataset.cols = String(term.cols);
+    host.dataset.rows = String(term.rows);
 
     const offData = window.halo.onTermData((ev) => {
       if (ev.id === termId) term.write(ev.data);
@@ -213,6 +228,11 @@ export default function TerminalPanel({
     let resizeTimer: number | null = null;
     let pendingResize: { cols: number; rows: number } | null = null;
     term.onResize(({ cols, rows }) => {
+      // Mirror the terminal's size onto the host for debugging and
+      // tests — it is the ground truth for "did a font-size change
+      // actually reflow this pane" (a bigger font means fewer cols).
+      host.dataset.cols = String(cols);
+      host.dataset.rows = String(rows);
       pendingResize = { cols, rows };
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
@@ -281,6 +301,19 @@ export default function TerminalPanel({
   useEffect(() => {
     if (focused) termRef.current?.focus();
   }, [focused]);
+
+  // Live font-size changes from Settings: set the option on the
+  // running terminal (xterm reflows its lines) and re-fit so the pty
+  // matches the new column count. No re-spawn — the shell keeps
+  // running, the prompt keeps its scrollback.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || fontSize === undefined) return;
+    if (term.options.fontSize !== fontSize) {
+      term.options.fontSize = fontSize;
+      fitRef.current?.();
+    }
+  }, [fontSize]);
 
   // "Reconnect all" from the parent: re-spawn this pane, but only if
   // it is actually dead. The effect runs only when the signal changes,

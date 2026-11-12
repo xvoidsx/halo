@@ -11,6 +11,7 @@ import type {
 declare global {
   interface Window {
     halo?: {
+      getVersion: () => Promise<string>;
       getSettings: () => Promise<HaloSettings>;
       saveSettings: (next: HaloSettings) => Promise<{ ok: true; path: string }>;
       listTrails: () => Promise<{ trails: Trail[] }>;

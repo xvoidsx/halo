@@ -14,6 +14,7 @@ import type {
 // directly — everything goes through these invoke channels and the two
 // event subscriptions below (terminal output / shell exit).
 contextBridge.exposeInMainWorld('halo', {
+  getVersion: (): Promise<string> => ipcRenderer.invoke('halo:getVersion'),
   getSettings: (): Promise<HaloSettings> => ipcRenderer.invoke('halo:getSettings'),
   saveSettings: (next: HaloSettings): Promise<{ ok: true; path: string }> =>
     ipcRenderer.invoke('halo:saveSettings', next),

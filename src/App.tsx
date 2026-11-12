@@ -63,6 +63,55 @@ const BYOK_PROVIDERS = [
     url: 'https://openrouter.ai/keys',
     urlLabel: 'openrouter.ai → Keys',
   },
+  {
+    key: 'groq',
+    name: 'Groq',
+    blurb: 'Very fast inference with a free tier. Llama, Qwen, and more, at ludicrous speed.',
+    url: 'https://console.groq.com/keys',
+    urlLabel: 'console.groq.com → API Keys',
+  },
+  {
+    key: 'mistral',
+    name: 'Mistral',
+    blurb: 'Mistral models via the Mistral API. Open-weights friendly, European-hosted.',
+    url: 'https://console.mistral.ai/api-keys',
+    urlLabel: 'console.mistral.ai → API keys',
+  },
+  {
+    key: 'huggingface',
+    name: 'Hugging Face',
+    blurb: 'Inference Endpoints + serverless inference for the models on the Hub — xvoidsx’s research home.',
+    url: 'https://huggingface.co/settings/tokens',
+    urlLabel: 'huggingface.co → Settings → Access Tokens',
+  },
+  {
+    key: 'gemini',
+    name: 'Google Gemini',
+    blurb: 'Gemini models via Google AI Studio. Free tier for trying things out.',
+    url: 'https://aistudio.google.com/apikey',
+    urlLabel: 'aistudio.google.com → Get API key',
+  },
+  {
+    key: 'xai',
+    name: 'xAI',
+    blurb: 'Grok models via the xAI API.',
+    url: 'https://console.x.ai/',
+    urlLabel: 'console.x.ai → API keys',
+  },
+  {
+    key: 'venice',
+    name: 'Venice',
+    blurb: 'Private, uncensored inference — Venice does not log prompts or train on your data. OpenAI-compatible API.',
+    url: 'https://venice.ai/settings/api',
+    urlLabel: 'venice.ai → Settings → API',
+  },
+  {
+    key: 'trustedrouter',
+    name: 'TrustedRouter',
+    blurb: 'One attested, OpenAI-compatible API for hundreds of models — the router proves the prompt path doesn’t log.',
+    url: 'https://trustedrouter.com/',
+    urlLabel: 'trustedrouter.com → API keys',
+  },
 ] as const;
 
 /** The Agents switcher: every live herdr agent, with status lights.
@@ -268,20 +317,35 @@ function SettingsView({
   setSettings,
   herdr,
   onRefreshHerdr,
+  onResetSidebarWidth,
 }: {
   settings: HaloSettings;
   setSettings: (next: HaloSettings) => void;
   herdr: HerdrState | null;
   onRefreshHerdr: () => void;
+  onResetSidebarWidth: () => void;
 }) {
   const [saved, setSaved] = useState('');
+  const [version, setVersion] = useState('');
   const [newRepoName, setNewRepoName] = useState('');
   const [newRepoPath, setNewRepoPath] = useState('');
 
+  useEffect(() => {
+    if (window.halo) window.halo.getVersion().then(setVersion).catch(() => {});
+  }, []);
+
   const save = async () => {
     if (window.halo) {
-      const res = await window.halo.saveSettings(settings);
-      setSaved(`Saved to ${res.path}`);
+      try {
+        const res = await window.halo.saveSettings(settings);
+        setSaved(`Saved to ${res.path}`);
+      } catch (e) {
+        // A failed save must say so, not pretend it worked — the
+        // settings file lives in a user-owned dir, but if that dir
+        // is not writable the user needs to know, not wonder why
+        // their font size (or a key) did not stick.
+        setSaved(`Could not save: ${e instanceof Error ? e.message : String(e)}`);
+      }
     } else {
       setSaved('Saved (browser preview — no Electron bridge, not persisted)');
     }
@@ -296,7 +360,13 @@ function SettingsView({
   };
 
   return (
-    <div className="main-body settings">
+    // The outer .main-body is the full-width scrolling container — the
+    // scrollbar belongs to it, so it sits at the far right edge of the
+    // window. The inner .settings is the 640px content column inside
+    // it. Never put the max-width on the scroller itself: the scrollbar
+    // then lands in the middle of the window (0.6.3 fix).
+    <div className="main-body">
+      <div className="settings">
       <h3>Repos</h3>
       {settings.repos.length === 0 && <p className="note">No repos yet — add one below. Repos are optional context, not a requirement: the terminal opens at home without one.</p>}
       {settings.repos.map((r) => (
@@ -406,11 +476,40 @@ function SettingsView({
         </div>
       ))}
 
+      <h3>Terminal</h3>
+      <label>
+        Font size
+        <select
+          value={settings.terminal.fontSize}
+          onChange={(e) =>
+            setSettings({ ...settings, terminal: { ...settings.terminal, fontSize: Number(e.target.value) } })
+          }
+        >
+          {[11, 12, 13, 14, 15, 16, 18].map((s) => (
+            <option key={s} value={s}>
+              {s}px{ s === 13 ? ' (default)' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="note">Applies to every terminal pane and the chat attach, live — no restart needed.</p>
+
+      <h3>Sidebar</h3>
+      <p className="note">Drag the sidebar’s right edge to resize it (200–420px); the width is remembered.</p>
+      <button className="icon-btn" onClick={onResetSidebarWidth}>
+        Reset sidebar width (280px)
+      </button>
+
+      <h3>Halo</h3>
+      <p className="note">Version {version || '…'}</p>
+      <p className="note">Local-first, no telemetry. Settings live at ~/.config/halo/settings.json (0600).</p>
+
       <div className="save-row">
         <button className="primary-btn" onClick={save}>
           Save settings
         </button>
         {saved && <span className="saved-msg">{saved}</span>}
+      </div>
       </div>
     </div>
   );
@@ -470,6 +569,17 @@ export default function App() {
   // behind a drag whose moves and pointerup fire in one burst, and
   // the saved width would be the pre-drag value.
   const sidebarWidthRef = useRef(sidebarWidth);
+  // Reset from Settings: back to the 280px default, and forget the
+  // persisted width so a reload does not bring the old one back.
+  const resetSidebarWidth = useCallback(() => {
+    sidebarWidthRef.current = SIDEBAR_DEFAULT;
+    setSidebarWidth(SIDEBAR_DEFAULT);
+    try {
+      window.localStorage.removeItem('halo.sidebarWidth');
+    } catch {
+      // storage unavailable — the state reset is what matters.
+    }
+  }, []);
   // Pane ids currently holding a live `herdr agent attach` in any
   // terminal — the chat poller must not `agent read` those (a read
   // kills a live attach). TerminalPanels report their attach state.
@@ -860,10 +970,11 @@ export default function App() {
               onAttachState={onAttachState}
               onExitState={onExitState}
               reconnectSignal={reconnectAllSignal}
+              fontSize={settings.terminal.fontSize}
             />
           </div>
         )}
-        {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} />}
+        {view === 'settings' && <SettingsView settings={settings} setSettings={setSettings} herdr={herdr} onRefreshHerdr={refreshHerdr} onResetSidebarWidth={resetSidebarWidth} />}
         {termMounted && (
           <div className={`terminal-view ${view === 'terminal' ? '' : 'hidden'}`}>
             <div className="terminal-toolbar">
@@ -897,6 +1008,7 @@ export default function App() {
                       pane={p}
                       onClose={termPanes.length > 1 ? () => closeTermPane(p.id) : undefined}
                       style={{ flexGrow: termSizes[i] ?? 1, flexBasis: 0 }}
+                      fontSize={settings.terminal.fontSize}
                       onAttachState={onAttachState}
                       onExitState={onExitState}
                       reconnectSignal={reconnectAllSignal}

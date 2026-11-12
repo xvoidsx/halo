@@ -24,11 +24,19 @@ export function loadSettings(): HaloSettings {
       ...defaultSettings,
       ...parsed,
       ollama: { ...defaultSettings.ollama, ...(parsed.ollama ?? {}) },
+      terminal: { ...defaultSettings.terminal, ...(parsed.terminal ?? {}) },
       byok: {
         openai: { ...defaultSettings.byok.openai, ...(parsed.byok?.openai ?? {}) },
         anthropic: { ...defaultSettings.byok.anthropic, ...(parsed.byok?.anthropic ?? {}) },
         openrouter: { ...defaultSettings.byok.openrouter, ...(parsed.byok?.openrouter ?? {}) },
         deepseek: { ...defaultSettings.byok.deepseek, ...(parsed.byok?.deepseek ?? {}) },
+        groq: { ...defaultSettings.byok.groq, ...(parsed.byok?.groq ?? {}) },
+        mistral: { ...defaultSettings.byok.mistral, ...(parsed.byok?.mistral ?? {}) },
+        huggingface: { ...defaultSettings.byok.huggingface, ...(parsed.byok?.huggingface ?? {}) },
+        gemini: { ...defaultSettings.byok.gemini, ...(parsed.byok?.gemini ?? {}) },
+        xai: { ...defaultSettings.byok.xai, ...(parsed.byok?.xai ?? {}) },
+        venice: { ...defaultSettings.byok.venice, ...(parsed.byok?.venice ?? {}) },
+        trustedrouter: { ...defaultSettings.byok.trustedrouter, ...(parsed.byok?.trustedrouter ?? {}) },
       },
     };
   } catch {

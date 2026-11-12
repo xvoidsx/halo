@@ -42,9 +42,11 @@ what to build, where things live, and the lessons that apply here.
   do not resolve bare labels.
 - Never fabricate an agent status you did not observe. A stub that says
   "not implemented" is correct; a fake "live" connection is not.
-- `herdr agent list` output shape is best-effort parsed (JSON first, then
-  raw lines). Verify the real format on a machine with herdr installed
-  before trusting the agent list.
+- `herdr agent list` is a JSON envelope, verified live against herdr 0.9.5
+  (see "Herdr CLI — verified live" below): the payload is under
+  `result.agents`, there is NO top-level `agents` key. Unrecognized JSON
+  returns null and the raw output is shown — never read a shape mismatch
+  as an empty list.
 
 ## Agent chat — the list + the live terminal (0.4.0, supersedes 0.3.0's text log)
 
@@ -329,6 +331,60 @@ what to build, where things live, and the lessons that apply here.
   poll returns a snapshot that no longer starts with the previous one
   (scrollback scrolled past the window), the whole snapshot is shown —
   never diffed into invented text.
+
+## 0.6.3 — settings round + close-crash fix (2026-11-12)
+
+- **Settings scrollbar sits at the far-right edge now.** The Settings
+  view's root div was itself the 640px-capped scroller, so its
+  scrollbar floated mid-window. Now the outer `.main-body` is the
+  full-width scroller and the 640px column is an inner div — the
+  scrollbar rides the viewport edge, the content stays narrow.
+  Pattern: the scrolling element is always full-width; the narrow
+  column lives inside it.
+- **Seven more BYOK providers** (11 cards total): Groq, Mistral,
+  Hugging Face, Google Gemini, xAI, Venice, TrustedRouter — alongside
+  Ollama (no key) and the original DeepSeek / OpenAI / Anthropic /
+  OpenRouter. Keys still connect to nothing; they only save locally
+  to settings.json (0600). When adding a provider, add its key in
+  THREE places: `BYOK_PROVIDERS` (App.tsx), the `byok` type +
+  defaults (types.ts), and the explicit per-key load-merge in
+  `electron/settingsFile.ts` — the merge drops any key it doesn't
+  name, so an old settings file silently loses a new provider's key.
+- **Terminal font size** is a setting now (11–18px, default 13),
+  applied live to every pane and the chat attach without re-spawning:
+  Terminal.tsx takes a `fontSize` prop, sets `term.options.fontSize`,
+  and re-fits. Verified: 13px = 139 cols, 16px = 108 cols on the
+  same pane.
+- **Version display** in Settings ("Version 0.6.3", from
+  `app.getVersion()` via a `halo:getVersion` IPC channel) and a
+  **Reset sidebar width** button (back to 280px, clears the
+  localStorage key).
+- **Save errors are honest now.** SettingsView's save is try/catch —
+  a failed save shows "Could not save: <message>" instead of silently
+  doing nothing. It caught a real one in the sandbox: the packaged
+  test instance was launched as root with HOME=/home/halotest, so
+  `/home/halotest/.config/halo/` was root-owned 700 and halotest's
+  saves threw EACCES. **Packaged test launches must run AS the test
+  user** (`su halotest -c ...`), never as root with the test user's
+  HOME — a root-owned config dir silently breaks settings saves (and
+  the app still runs fine otherwise, so nothing looks wrong until you
+  check the log).
+- **Close-crash fix (Raven's bench, 2026-11-12 01:29).** Closing Halo
+  showed Electron's "A JavaScript error occurred in the main process
+  — Object has been destroyed" dialog: a pty flushing a final chunk
+  after the window closed called `win.webContents.send` on a
+  destroyed webContents. `win?.` only guards a null win, not a
+  destroyed one. Both send callbacks in main.ts now check
+  `win && !win.webContents.isDestroyed()` before sending (the check
+  and the send are synchronous, so no race between them).
+- **Close-test zombie rule.** After `Browser.close` the main process
+  can exit but linger as an unreaped zombie under the su/xvfb-run
+  parent, so `process.kill(pid, 0)` keeps succeeding for a dead
+  process. `scripts/close-test.mjs` reads `/proc/<pid>/stat` and
+  treats state `Z` as exited. The packaged close test failed 3x on
+  the old check and passes on the hardened one — the app itself
+  always exited cleanly (exit 0, port freed); the test was watching
+  a corpse.
 
 ## Terminal (xterm.js + node-pty)
 

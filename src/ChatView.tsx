@@ -95,6 +95,7 @@ export default function ChatView({
   onAttachState,
   onExitState,
   reconnectSignal,
+  fontSize,
 }: {
   herdr: HerdrState | null;
   activePaneId: string | null;
@@ -108,6 +109,8 @@ export default function ChatView({
   onExitState: (paneId: string, dead: boolean) => void;
   /** Bumps when the parent wants every dead pane re-spawned. */
   reconnectSignal: number;
+  /** Terminal font size (px) — from Settings, shared with the Terminal tab. */
+  fontSize: number;
 }) {
   const agents = herdr?.agents ?? [];
   const [selectedPaneId, setSelectedPaneId] = useState<string | null>(activePaneId);
@@ -283,6 +286,7 @@ export default function ChatView({
                 cwd: '',
                 command: `herdr agent attach ${selected.paneId}`,
               }}
+              fontSize={fontSize}
               onAttachState={onAttachState}
               onExitState={onExitState}
               reconnectSignal={reconnectSignal}
