@@ -68,16 +68,18 @@ no fake replies, ever.
 
 ### Trails
 
-- Live from the Entire CLI. Set the project in Settings → Entire
-  Trails (`et/<project>` for a native repo, `gh/<owner>` for a GitHub
-  mirror) and the list fills from `entire trail list --json`,
-  refreshing every 30 s. Click a trail for the detail (`entire trail
-  show --json`): eval scores when review agents have scored it
-  (security / slop / human review / confidence / risk), "No evals yet"
-  when they haven't, findings with severity + suggested fixes, linked
-  sessions/checkpoints, gates/approvals, the last five runs, and a link
-  out to the trail on Entire. Until a project is set, the list stays
-  empty and says why.
+- Live from the Entire CLI. Set the projects in Settings → Entire
+  Trails, one per line (`et/<project>` for a native repo,
+  `gh/<owner>` for a GitHub mirror) and the list fills from
+  `entire trail list --json`, refreshing every 30 s. Trails stay an
+  Entire thing: native projects list under Trails, mirrored projects
+  under their own GitHub section. Click a trail for the detail
+  (`entire trail show --json`): eval scores when review agents have
+  scored it (security / slop / human review / confidence / risk),
+  "No evals yet" when they haven't, findings with severity +
+  suggested fixes, linked sessions/checkpoints, gates/approvals, the
+  last five runs, and a link out to the trail on Entire. Until a
+  project is set, the list stays empty and says why.
 
 ### Settings
 
@@ -100,7 +102,12 @@ no fake replies, ever.
   trail object itself, with an entire.com URL. The list carries no
   repo/branch names — only repo ULIDs — so Halo shows the phase and
   links out rather than inventing a repo name. A trail with no evals
-  renders "No evals yet", never faked numbers.
+  renders "No evals yet", never faked numbers. Several projects list
+  at once — native under Trails, mirrored under GitHub — and each
+  trail carries its project, so the detail fetch goes to the right
+  one. The gh side is verified against a fixture transcribed from a
+  screenshot so far; the real `gh/rav3ndust` JSON is still to be
+  checked.
 - In-app terminal: xterm.js in the renderer, node-pty shell in the main
   process (copland's stack: WebGL renderer with a canvas fallback, the
   terminal chunk lazy-loads so the trail view stays light). Pty resizes
@@ -135,7 +142,7 @@ no fake replies, ever.
 
 ## Next steps
 
-1. Bench the 0.7.0 Trails build against the live trail-test trail.
+1. Bench the 0.8.0 multi-project Trails build against the live trails (et/xvoidsx + gh/rav3ndust).
 2. Show it off in the Entire Discord after watching a Trail run.
 3. Ollama wiring (local-first default model) + BYOK provider calls.
 4. Horizontal splits (split-tree model).

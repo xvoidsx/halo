@@ -6,7 +6,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { HaloSettings } from '../src/types.js';
+import type { EntireConfig, HaloSettings } from '../src/types.js';
 import { defaultSettings } from '../src/types.js';
 
 const DIR = path.join(os.homedir(), '.config', 'halo');
@@ -14,6 +14,25 @@ const FILE = path.join(DIR, 'settings.json');
 
 export function settingsPath(): string {
   return FILE;
+}
+
+/** The Entire section used to hold a single `project` string (0.7.0);
+ * 0.8.0 holds a `projects` list. A file with the old shape migrates
+ * in place — the old key is dropped on the next save. */
+function normalizeEntire(raw: unknown): EntireConfig {
+  const rec = (typeof raw === 'object' && raw !== null ? raw : {}) as {
+    projects?: unknown;
+    project?: unknown;
+  };
+  if (Array.isArray(rec.projects)) {
+    const list = rec.projects
+      .filter((p): p is string => typeof p === 'string')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return { projects: [...new Set(list)] };
+  }
+  if (typeof rec.project === 'string' && rec.project.trim()) return { projects: [rec.project.trim()] };
+  return { projects: [] };
 }
 
 export function loadSettings(): HaloSettings {
@@ -24,7 +43,7 @@ export function loadSettings(): HaloSettings {
       ...defaultSettings,
       ...parsed,
       ollama: { ...defaultSettings.ollama, ...(parsed.ollama ?? {}) },
-      entire: { ...defaultSettings.entire, ...(parsed.entire ?? {}) },
+      entire: normalizeEntire(parsed.entire),
       terminal: { ...defaultSettings.terminal, ...(parsed.terminal ?? {}) },
       byok: {
         openai: { ...defaultSettings.byok.openai, ...(parsed.byok?.openai ?? {}) },

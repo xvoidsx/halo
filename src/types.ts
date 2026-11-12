@@ -60,6 +60,10 @@ export interface Trail {
   branch: string;
   status: TrailStatus;
   agent: string;
+  /** Entire project slug this trail came from, e.g. 'et/xvoidsx'
+   * or 'gh/rav3ndust' — the sidebar groups by it, and the detail
+   * fetch needs it back. */
+  project: string;
   /** Workflow phase from the Entire API (e.g. "planning") — the
    * list carries it; absent on shapes that don't. */
   phase?: string;
@@ -158,10 +162,13 @@ export interface TerminalConfig {
 }
 
 export interface EntireConfig {
-  /** Entire project for the Trails list, e.g. 'et/trails-test' or
-   * 'gh/xvoidsx'. `entire trail list` requires --project, so the
-   * list stays empty until this is set. Empty = not configured. */
-  project: string;
+  /** Entire projects for the Trails list, e.g. 'et/xvoidsx' and
+   * 'gh/rav3ndust'. `entire trail list` requires --project, so the
+   * list stays empty until at least one is set. Empty = not
+   * configured. Trails stay an Entire thing: native (et/) projects
+   * list under Trails, GitHub-mirrored (gh/) ones under their own
+   * GitHub section. */
+  projects: string[];
 }
 
 export interface HaloSettings {
@@ -191,7 +198,7 @@ export const defaultSettings: HaloSettings = {
   activeRepoId: null,
   activeAgentPaneId: null,
   ollama: { baseUrl: 'http://127.0.0.1:11434', defaultModel: 'qwen3:8b' },
-  entire: { project: '' },
+  entire: { projects: [] },
   terminal: { fontSize: 13 },
   byok: {
     openai: { apiKey: '', enabled: false },

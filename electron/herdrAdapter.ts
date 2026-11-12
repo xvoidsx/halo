@@ -281,7 +281,7 @@ function mapTrailStatus(raw: unknown): TrailStatus {
   return 'running'; // 'open' and anything unrecognized: the trail is live
 }
 
-function mapTrailEntry(entry: unknown): Trail | null {
+function mapTrailEntry(entry: unknown, project: string): Trail | null {
   const rec = asRecord(entry);
   if (!rec) return null;
   const num = rec.number ?? rec.id;
@@ -297,6 +297,7 @@ function mapTrailEntry(entry: unknown): Trail | null {
     branch: asString(rec.branch),
     status: mapTrailStatus(rec.status),
     agent: asString(rec.agent),
+    project,
     // The list carries a workflow phase ("planning", …); the detail
     // may refine it. Absent on shapes that don't carry one.
     phase: asString(rec.phase) || undefined,
@@ -351,11 +352,11 @@ function mapGates(v: unknown): Gate[] {
 /** `show` returns the trail intent plus `changes[]` — one entry per
  * repository branch, each with its own URL. It may wrap the trail
  * under a `trail` key. */
-function mapTrailDetail(json: unknown, fallbackId: string): Trail | null {
+function mapTrailDetail(json: unknown, fallbackId: string, project: string): Trail | null {
   const rec = asRecord(json);
   if (!rec) return null;
   const t = asRecord(rec.trail) ?? rec;
-  const base = mapTrailEntry(t);
+  const base = mapTrailEntry(t, project);
   if (!base) return null;
   const changes = Array.isArray(t.changes) ? t.changes : [];
   const first = asRecord(changes[0]);
@@ -370,31 +371,51 @@ function mapTrailDetail(json: unknown, fallbackId: string): Trail | null {
 }
 
 /** The Trails sidebar, from `entire trail list --project <project>
-/// --json`. The project comes from Settings → Entire Trails. */
-export async function listTrails(project: string): Promise<TrailListResult> {
-  if (!project) {
+/// --json` — once per configured project (Settings → Entire Trails),
+/// native and GitHub-mirrored alike. Each trail carries the project
+/// it came from, so the sidebar can group by it. One project's failure
+/// never blanks the others: it lands in the detail note instead. */
+export async function listTrails(projects: string[]): Promise<TrailListResult> {
+  const list = (projects ?? []).map((p) => p.trim()).filter(Boolean);
+  if (list.length === 0) {
     return { trails: [], detail: 'No Entire project configured — set it in Settings → Entire Trails.' };
   }
-  const { code, stdout, stderr } = await runEntire(['trail', 'list', '--project', project, '--json']);
-  if (code === -1) {
-    return { trails: [], detail: 'entire CLI not found on PATH — install it and run `entire login`.' };
+  const trails: Trail[] = [];
+  const problems: string[] = [];
+  for (const project of list) {
+    const { code, stdout, stderr } = await runEntire(['trail', 'list', '--project', project, '--json']);
+    if (code === -1) {
+      return { trails: [], detail: 'entire CLI not found on PATH — install it and run `entire login`.' };
+    }
+    if (code !== 0) {
+      const err = stderr.trim() || stdout.trim();
+      problems.push(`${project}: ${err.slice(0, 120)}`);
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      problems.push(`${project}: output that is not JSON`);
+      continue;
+    }
+    const arr = trailArray(parsed);
+    if (arr === null) {
+      problems.push(`${project}: unrecognized \`entire trail list --json\` shape`);
+      continue;
+    }
+    for (const t of arr.map((e) => mapTrailEntry(e, project))) if (t) trails.push(t);
   }
-  if (code !== 0) {
-    const err = stderr.trim() || stdout.trim();
-    return { trails: [], detail: `entire trail list failed: ${err.slice(0, 200)}` };
+  if (trails.length === 0 && problems.length > 0) {
+    return { trails: [], detail: `entire trail list failed — ${problems.join('; ')}` };
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return { trails: [], detail: 'entire trail list returned output that is not JSON.' };
-  }
-  const arr = trailArray(parsed);
-  if (arr === null) {
-    return { trails: [], detail: 'Unrecognized `entire trail list --json` shape — nothing listed.' };
-  }
-  const trails = arr.map(mapTrailEntry).filter((t): t is Trail => t !== null);
-  return { trails, detail: trails.length === 0 ? 'No trails in this project yet.' : '' };
+  const detail =
+    problems.length > 0
+      ? `Some projects failed to list — ${problems.join('; ')}`
+      : trails.length === 0
+        ? 'No trails in these projects yet.'
+        : '';
+  return { trails, detail };
 }
 
 /** The detail view, from `entire trail show <id> --project <project>
@@ -418,7 +439,7 @@ export async function getTrail(id: string, project: string): Promise<TrailDetail
   } catch {
     return { trail: null, detail: 'entire trail show returned output that is not JSON.' };
   }
-  const trail = mapTrailDetail(parsed, id);
+  const trail = mapTrailDetail(parsed, id, project);
   if (!trail) return { trail: null, detail: 'Unrecognized `entire trail show --json` shape.' };
   return { trail, detail: '' };
 }

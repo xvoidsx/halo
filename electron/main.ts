@@ -58,24 +58,32 @@ function createWindow(termManager: TerminalManager): void {
 app.whenReady().then(() => {
   // Terminal: node-pty shells, one per repo. Output streams to the
   // renderer; input and resizes come back over IPC. The sends are
-  // guarded by isDestroyed(): when the window closes, a pty can still
-  // flush a final data chunk (or an exit) after the webContents is
-  // destroyed but before killAll() has run — sending to a destroyed
-  // webContents throws "Object has been destroyed" as an uncaught
-  // main-process exception, which is the error dialog on close
-  // (2026-11-12, Raven's bench). The check and the send are in one
-  // synchronous block, so the window cannot be destroyed between them.
+  // guarded so a pty flushing after the window closes can never throw:
+  // when the window closes, a pty can still flush a final data chunk
+  // (or an exit) after the webContents is destroyed but before
+  // killAll() has run. The 0.6.3 guard checked
+  // `win.webContents.isDestroyed()` first — but accessing `.webContents`
+  // on a destroyed BrowserWindow throws "Object has been destroyed"
+  // BEFORE the check ever runs (proven 2026-11-12 with a throwaway
+  // Electron script: `win.webContents` throws on a destroyed window,
+  // `win.isDestroyed()` returns true safely; Raven's 0.7.0 dialog
+  // pointed at main.js:61:25, the `.webContents` access inside the
+  // `if` condition, not the send). So `win.isDestroyed()` comes first
+  // — it is the only safe touch on a dead window — and the send itself
+  // sits in a try/catch backstop: a send to a dying renderer is
+  // expected, its data has no one to receive it, and it must never
+  // surface as the error dialog on close.
+  const sendToRenderer = (channel: string, payload: unknown): void => {
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+    try {
+      win.webContents.send(channel, payload);
+    } catch {
+      // The renderer went away mid-send — nothing to receive it.
+    }
+  };
   const termManager = new TerminalManager(
-    (id, data) => {
-      if (win && !win.webContents.isDestroyed()) {
-        win.webContents.send('halo:term-data', { id, data });
-      }
-    },
-    (id, code) => {
-      if (win && !win.webContents.isDestroyed()) {
-        win.webContents.send('halo:term-exit', { id, code });
-      }
-    },
+    (id, data) => sendToRenderer('halo:term-data', { id, data }),
+    (id, code) => sendToRenderer('halo:term-exit', { id, code }),
   );
   ipcMain.handle('halo:term-spawn', (_e, repoId: string, cwd: string, cols: number, rows: number, command?: string) =>
     termManager.spawn(repoId, cwd, cols, rows, command),
@@ -94,11 +102,11 @@ app.whenReady().then(() => {
     return { ok: true, path: settingsPath() };
   });
 
-  // Trails: live from the Entire CLI (see herdrAdapter.ts). The project
-  // comes from Settings → Entire Trails; without it the list is empty
+  // Trails: live from the Entire CLI (see herdrAdapter.ts). The projects
+  // come from Settings → Entire Trails; without one the list is empty
   // with a detail that says why — never placeholder data.
-  ipcMain.handle('halo:listTrails', () => listTrails(loadSettings().entire.project.trim()));
-  ipcMain.handle('halo:getTrail', (_e, id: string) => getTrail(id, loadSettings().entire.project.trim()));
+  ipcMain.handle('halo:listTrails', () => listTrails(loadSettings().entire.projects));
+  ipcMain.handle('halo:getTrail', (_e, id: string, project: string) => getTrail(id, (project ?? '').trim()));
 
   // Herdr: real detection via the herdr CLI; trail watching is a stub
   // until `entire trail watch --json` streaming lands.

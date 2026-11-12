@@ -172,6 +172,12 @@ button, input, select { font: inherit; color: inherit; }
   text-transform: uppercase;
   color: var(--dim);
 }
+.trail-list .t-project {
+  margin: 10px 8px 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
 .trail-row {
   display: block;
   width: 100%;

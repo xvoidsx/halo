@@ -386,7 +386,7 @@ what to build, where things live, and the lessons that apply here.
   always exited cleanly (exit 0, port freed); the test was watching
   a corpse.
 
-## Trails — live data from the Entire CLI (0.7.0, 2026-11-12)
+## Trails — live data from the Entire CLI (0.7.0–0.8.0, 2026-11-12)
 
 - **Trails are real now, not stubs.** `halo:listTrails` / `halo:getTrail`
   shell out to the Entire CLI: `entire trail list --project <project>
@@ -455,6 +455,48 @@ what to build, where things live, and the lessons that apply here.
   The packaged trails test needs the fake on halotest's PATH the same
   way the dev test needs it on the dev app's PATH. (0.7.0 packaged
   suite: ui-smoke, settings, trails, close — all green as halotest.)
+  **Re-copy the fake to /home/halotest/fakebin after any fake change**
+  — the packaged app reads halotest's copy, not ~/workspace/.tmp.
+  Also reset halotest's settings file to `projects: []` before the
+  packaged ui-smoke run, or the leftover project lists a trail and
+  the empty-state checks fail (seen 0.8.0).
+- **0.8.0 — multi-project sidebar (2026-11-12): Trails stays Entire-only.**
+  Settings holds a project *list* (`entire.projects`, one per line);
+  the old single `project` string migrates in place on load
+  (`settingsFile.ts` `normalizeEntire`). `listTrails(projects)` fetches
+  each project in turn; one project's failure lands in the detail note
+  instead of blanking the others. Each trail carries its project, so
+  the sidebar groups by slug — native (et/) under Trails, mirrored
+  (gh/) under their own GitHub section — and the detail fetch passes
+  that trail's project back (`getTrail(id, project)`; the renderer
+  reads it from a `trailsRef` mirror so the 30 s refresh never
+  re-fetches the detail). The gh fixtures are transcribed from Raven's
+  screenshot of his gh trail (real id/title/url), not his JSON — swap
+  them for the real `trail list/show --project gh/rav3ndust --json`
+  when he pastes it. Close-test flaked once on the 10 s window during
+  the 0.8.0 suite (still alive after 10 s, then killed by the test's
+  cleanup) — that was the same bug, NOT timing (corrected 2026-11-12
+  after Raven's 0.7.0 screenshot proved the dialog still appears on
+  close).
+- **Close crash, real root cause (2026-11-12, fixed in 0.8.0):** the
+  0.6.3 guard checked `win.webContents.isDestroyed()` first — but
+  accessing `.webContents` on a destroyed BrowserWindow throws
+  "Object has been destroyed" BEFORE the check ever runs. Proven with
+  a throwaway Electron script (`win.webContents` throws on a destroyed
+  window; `win.isDestroyed()` returns true safely) and by the 0.7.0
+  dialog's stack (main.js:61:25 — the `.webContents` access inside
+  the `if` condition, not the send). The fix funnels both sends through
+  one `sendToRenderer` helper: `win.isDestroyed()` first (the only
+  safe touch on a dead window), then the webContents check, then the
+  send inside try/catch. The busy-pty close test
+  (`scripts/close-busy-test.mjs`, spawns a `yes` pty then closes)
+  did NOT reproduce the hang even on the buggy build — the sandbox
+  process exits before the pty's buffered read lands, while Raven's
+  busier machine gives the loop a tick longer — so it is regression
+  cover only; the proof is the destroyed-window experiment above.
+  Lesson: a guard must only touch APIs that are safe on the object it
+  guards; verifying the guard's presence in the asar is not verifying
+  it works.
 - **Rig spec correction (2026-11-12).** The intended herdr rig is
   THREE agents — fakepi on w1:p1, fakepi2, opencode-test — because
   chat-list-test requires a fakepi2 agent (it asserts row 2 and sends

@@ -16,7 +16,7 @@ declare global {
       getSettings: () => Promise<HaloSettings>;
       saveSettings: (next: HaloSettings) => Promise<{ ok: true; path: string }>;
       listTrails: () => Promise<TrailListResult>;
-      getTrail: (id: string) => Promise<TrailDetailResult>;
+      getTrail: (id: string, project: string) => Promise<TrailDetailResult>;
       herdrStatus: () => Promise<HerdrState>;
       watchTrail: (id: string) => Promise<{ status: string; todo: string }>;
       agentSend: (paneId: string, text: string) => Promise<AgentSendResult>;

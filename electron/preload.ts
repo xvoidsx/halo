@@ -20,7 +20,8 @@ contextBridge.exposeInMainWorld('halo', {
   saveSettings: (next: HaloSettings): Promise<{ ok: true; path: string }> =>
     ipcRenderer.invoke('halo:saveSettings', next),
   listTrails: (): Promise<TrailListResult> => ipcRenderer.invoke('halo:listTrails'),
-  getTrail: (id: string): Promise<TrailDetailResult> => ipcRenderer.invoke('halo:getTrail', id),
+  getTrail: (id: string, project: string): Promise<TrailDetailResult> =>
+    ipcRenderer.invoke('halo:getTrail', id, project),
   herdrStatus: (): Promise<HerdrState> => ipcRenderer.invoke('halo:herdrStatus'),
   watchTrail: (id: string): Promise<{ status: string; todo: string }> =>
     ipcRenderer.invoke('halo:watchTrail', id),

@@ -433,18 +433,30 @@ function SettingsView({
 
       <h3>Entire Trails</h3>
       <label>
-        Project
-        <input
-          type="text"
-          value={settings.entire.project}
-          onChange={(e) => setSettings({ ...settings, entire: { ...settings.entire, project: e.target.value } })}
-          placeholder="e.g. et/trails-test or gh/xvoidsx"
+        Projects (one per line)
+        <textarea
+          rows={3}
+          value={settings.entire.projects.join('\n')}
+          onChange={(e) =>
+            setSettings({
+              ...settings,
+              entire: {
+                ...settings.entire,
+                projects: e.target.value
+                  .split('\n')
+                  .map((p) => p.trim())
+                  .filter(Boolean),
+              },
+            })
+          }
+          placeholder={'et/xvoidsx\ngh/rav3ndust'}
         />
       </label>
       <p className="note">
         The Trails list comes from `entire trail list --project`, which needs a project — `et/&lt;project&gt;` for a
-        native Entire repo, `gh/&lt;owner&gt;` for a GitHub mirror. The Entire CLI must be installed and logged in.
-        Until a project is set, the Trails list stays empty.
+        native Entire repo, `gh/&lt;owner&gt;` for a GitHub mirror. Trails stay an Entire thing: native projects
+        list under Trails, mirrored projects under their own GitHub section. The Entire CLI must be installed and
+        logged in. Until a project is set, the Trails list stays empty.
       </p>
 
       <h3>Ollama — local-first</h3>
@@ -552,6 +564,11 @@ function SettingsView({
 export default function App() {
   const [view, setView] = useState<View>('trail');
   const [trails, setTrails] = useState<Trail[]>([]);
+  // Synchronous mirror of the trail list: the detail effect needs the
+  // selected trail's project, and reading it from state would re-fetch
+  // the detail on every 30 s list refresh. The ref is set in the same
+  // beat as the state, before the selection can change.
+  const trailsRef = useRef<Trail[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   // Human-readable trail-list state (empty because no project is
   // configured, the CLI is missing, …) — shown in the sidebar and
@@ -645,6 +662,7 @@ export default function App() {
     if (!window.halo) return;
     void window.halo.listTrails().then((res) => {
       setTrails(res.trails);
+      trailsRef.current = res.trails;
       setTrailsDetail(res.detail);
       setSelectedId((prev) => {
         if (prev && res.trails.some((t) => t.id === prev)) return prev;
@@ -666,6 +684,7 @@ export default function App() {
     // (vite dev) there is no Electron bridge, so the shell previews empty.
     if (!window.halo) {
       setTrails([]);
+      trailsRef.current = [];
       setTrailsDetail('No Electron bridge (browser preview).');
       setHerdr({ installed: false, detail: 'No Electron bridge (browser preview).', agents: [] });
       return;
@@ -689,8 +708,9 @@ export default function App() {
   // clobbers a fuller trail with its thin list row.
   useEffect(() => {
     if (!selectedId || !window.halo) return;
+    const project = trailsRef.current.find((t) => t.id === selectedId)?.project ?? '';
     let cancelled = false;
-    void window.halo.getTrail(selectedId).then((res) => {
+    void window.halo.getTrail(selectedId, project).then((res) => {
       if (cancelled || !res.trail) return;
       const full = res.trail;
       setTrailDetails((prev) => ({ ...prev, [full.id]: full }));
@@ -921,6 +941,44 @@ export default function App() {
     [trails, trailDetails, selectedId],
   );
 
+  // Trails stay an Entire thing: native (et/) projects group under
+  // Trails, GitHub-mirrored (gh/) projects under their own GitHub
+  // section — one group per project slug, in settings order.
+  const trailGroups = useMemo(() => {
+    const order: string[] = [];
+    const byProject = new Map<string, Trail[]>();
+    for (const t of trails) {
+      const group = byProject.get(t.project);
+      if (group) group.push(t);
+      else {
+        byProject.set(t.project, [t]);
+        order.push(t.project);
+      }
+    }
+    const et = order.filter((p) => !p.startsWith('gh/')).map((p) => ({ project: p, trails: byProject.get(p) ?? [] }));
+    const gh = order.filter((p) => p.startsWith('gh/')).map((p) => ({ project: p, trails: byProject.get(p) ?? [] }));
+    return { et, gh };
+  }, [trails]);
+
+  const renderTrailGroup = (project: string, group: Trail[]) => (
+    <div key={project} className="trail-group">
+      <h3 className="t-project">{project}</h3>
+      {group.map((t) => (
+        <button
+          key={t.id}
+          className={`trail-row ${selected?.id === t.id && view === 'trail' ? 'active' : ''}`}
+          onClick={() => selectTrail(t.id)}
+        >
+          <div className="t-title">
+            {t.title}
+            <span className={`pill ${STATUS_PILL[t.status] ?? 'cyan'}`}>{t.status}</span>
+          </div>
+          <div className="t-meta">{[t.repo, t.agent, t.phase].filter(Boolean).join(' · ')}</div>
+        </button>
+      ))}
+    </div>
+  );
+
   // Dragging the sidebar's right edge resizes it. The width is
   // clamped live and saved when the drag ends, so it sticks.
   const onSidebarPointerDown = (e: React.PointerEvent) => {
@@ -979,21 +1037,9 @@ export default function App() {
         <div className="trail-list">
           <h2>Trails</h2>
           {trails.length === 0 && <p className="note">{trailsDetail || 'No trails yet.'}</p>}
-          {trails.map((t) => (
-            <button
-              key={t.id}
-              className={`trail-row ${selected?.id === t.id && view === 'trail' ? 'active' : ''}`}
-              onClick={() => selectTrail(t.id)}
-            >
-              <div className="t-title">
-                {t.title}
-                <span className={`pill ${STATUS_PILL[t.status] ?? 'cyan'}`}>{t.status}</span>
-              </div>
-              <div className="t-meta">
-                {[t.repo, t.agent, t.phase].filter(Boolean).join(' · ')}
-              </div>
-            </button>
-          ))}
+          {trailGroups.et.map((g) => renderTrailGroup(g.project, g.trails))}
+          {trailGroups.gh.length > 0 && <h2>GitHub</h2>}
+          {trailGroups.gh.map((g) => renderTrailGroup(g.project, g.trails))}
         </div>
         <button className="sidebar-foot" onClick={refreshHerdr} title="Refresh herdr agents">
           <span className={`status-light ${herdr ? (herdr.installed ? (herdr.agents.length ? 'green' : 'amber') : 'gray') : 'gray'}`}>●</span>
